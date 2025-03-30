@@ -1,0 +1,355 @@
+'### Copyright (c) 1997-1999 NetIQ Corp. All rights reserved.
+'### 
+'### SQL_DataSpace.ebs
+'###
+'### This KS can be dropped on the database folder or any database.
+'###
+'### If user specifies "y" to "Dynamically enumerate at each interval? (y/n)",  then 
+'### objects will always be enunumerated For every intervals.  A user can choose To 
+'### exclude Any items.  For example, specifying "master,model,mdb". Events will always 
+'### cause the folder To blink.  If it Is "n", namely it's Static, the list of objects 
+'### under that folder will be used. 
+'###
+'### If the KS is dropped on an object under the folder, even if "Dynamically enumerate at 
+'### each interval? (y/n)" is set to be "y", we'll treat it like "n", namely static. When 
+'### an event occurs, that particular object, not the folder, will blink. 
+'### 
+'### The value is the available DATA size in MB or the used DATA space
+'### in %.
+'### 
+'### Note: Dynamic only applies to Version 3.o and above.
+'###
+
+'$Revision: 3 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.370.0.3"
+Const KSVerID = "1.0"
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'ObjFullPath = 1			' Full path object name
+'NeedKPW = 1				' Need Password
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors the data available space in a database. 
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = Hourly			' Running at one hour interval
+'### End KPC Section
+
+'### Begin Type Section
+Const SQLT_DatabaseF = ""		 'Databases folder
+Const SQLT_DatabaseObj = ""		 'Database Object
+'### End Type Section
+
+'### Begin KPP Section
+
+'[V<Monitors the available data space (in MB) and the used data space(in %) in a db. When ANY database's available space is lower than the threshold, an event is raised. Use sysadmin role account for SQL 7.0.>V]	
+Const DYNAMIC = "y"		'[M<Dynamically enumerate at each interval? (y/n)>M] [T<String,1,,"yn">T]
+Const EXCLUDE = ""		'[M<Exclude these objects (separate object names with a comma)>M] [T<String,32000,',',>T]
+Const DO_EVENT = "y"	'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"		'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const UName = "sa"		'[M<SQL Login>M] [T<String,128,'^',>T]
+Const TH_FREE = 0.5		'[M<Available Space < >M] [T<Integer,,,0,,MB>T]
+Const TH_UTIL = 90		'[M<Space Util > >M] [T<Integer,,, 0, 100, %>T]
+Const Severity = 5		'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When the available space is lower than the threshold, the selected action is taken.>A] 
+Const AKPID = "AKP_NULL"	  '[M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Dim SQL As Object
+Dim Space As Object
+Dim version As String
+Dim ExcludeItems As Long
+Dim dynamicDb As Boolean
+
+Const V3 = "3.0"
+
+Type OBJS_STRUCT
+	ServName As String
+	ObjName As String
+	ObjId As String
+	FullObj As String
+End Type
+
+Private g_objs() As OBJS_STRUCT
+Dim g_objcnt As Long
+
+' Extract server name, object name and object id
+Sub ParseObj(ServNum As Long, ObjNum As Long, ObjIdNum As Long, Objtype As String)
+	Dim I As Long
+	Dim fullobj As String
+
+	For I = 1 To g_objcnt
+		fullobj = Item$(Objtype, I,, ",")
+		g_objs(I).ServName = Item$(fullobj, ServNum,, ":")
+		g_objs(I).ObjName = Item$(fullobj, ObjNum,, ":")
+		g_objs(I).ObjId = Item$(fullobj, ObjIdNum,, ":")
+		g_objs(I).FullObj = fullobj
+	Next I
+End Sub
+
+' Send data and event - for dynamic, using stream name.
+Sub DynamicDataEvent(resname As String, db As String, free As Double, util As Double, freeErrorCode As Long,_
+ freeErrorMsg As String, utilErrorCode As Long, utilErrorMsg As String, ServName As String, streamName As String)
+	   		
+	Dim eventmsg As String
+	Dim longm As String
+	Dim rc As Boolean
+	Dim AgtMsg As String
+
+	If freeErrorCode = -1 Then
+		free = -1
+		eventmsg = "Error: DB " & db & " data space avail @" & ServName
+		MSActions Severity, eventmsg, AKPID, resname, freeErrorMsg
+	End If				
+		
+	If utilErrorCode = -1 Then
+		util = -1
+		eventmsg = "Error: DB " & db & " data space util @" & ServName
+		MSActions Severity, eventmsg, AKPID, resname, utilErrorMsg
+	End If	
+
+	If free = -1 Or util = -1 Then
+		GoTo continue
+	End If
+
+	If DO_EVENT = "y" Then
+
+		If free < TH_FREE Then
+				eventmsg = "DB " & db & " data space low @" & ServName
+    			longm = "The data (" & db & ")'s available space is " & Format$(free, "0.00") & "MB; <TH = " & CStr(TH_FREE)   	
+    			MSActions Severity, eventmsg, AKPID, resname, longm 
+		End If
+
+		If util > TH_UTIL Then
+				eventmsg = "DB " & db & " data space low @" & ServName	
+    			longm = "The data (" & db & ") is " & Format$(util, "0.00") & "% full; >TH = " & Cstr(TH_UTIL)  	
+    			MSActions Severity, eventmsg, AKPID, resname, longm 
+		End If
+	End If
+
+continue:
+
+	If DO_DATA = "y" Then
+		AgtMsg = "Avail MB= " & Format$(free, "0.00") & chr$(10) & "Used %= " & Format$(util, "0.00") & chr$(10)
+		rc = DynaDataLog(streamName & "A", "Available data (" & db & ") space^^MB @" & ServName, free, AgtMsg)
+		AgtMsg = "Avail MB= " & Format$(free, "0.00") & chr$(10) & "Used %= " & Format$(util, "0.00") & chr$(10)
+		rc = DynaDataLog(streamName & "U", "Data (" & db & ") space util^^% @" & ServName, util, AgtMsg)
+	End If
+End Sub
+
+' Send data and event - for static, using stream id
+Sub DataEvent(resname As String, free As Double, util As Double, freeErrorCode As Long,_
+ freeErrorMsg As String, utilErrorCode As Long, utilErrorMsg As String, streamid As Long)
+	   		
+	Dim eventmsg As String
+	Dim longm As String
+
+	If freeErrorCode = -1 Then
+		free = -1
+		eventmsg = "Error: DB " & g_objs(streamid).ObjName & " data space avail @" & g_objs(streamid).ServName
+		MSActions Severity, eventmsg, AKPID, resname, freeErrorMsg
+	End If				
+		
+	If utilErrorCode = -1 Then
+		util = -1
+		eventmsg = "Error: DB " & g_objs(streamid).ObjName & " data space util @" & g_objs(streamid).ServName
+		MSActions Severity, eventmsg, AKPID, resname, utilErrorMsg
+	End If	
+
+	If free = -1 Or util = -1 Then
+		GoTo continue
+	End If
+
+	If DO_EVENT = "y" Then
+
+		If free < TH_FREE Then
+				eventmsg = "DB " & g_objs(streamid).ObjName & " data space low @" & g_objs(streamid).ServName
+    			longm = "The data (" & g_objs(streamid).ObjName & ")'s available space is " & Format$(free, "0.00") & "MB; <TH = " & CStr(TH_FREE)   	
+    			MSActions Severity, eventmsg, AKPID, resname, longm 
+		End If
+
+		If util > TH_UTIL Then
+				eventmsg = "DB " & g_objs(streamid).ObjName & " data space low @" & g_objs(streamid).ServName	
+    			longm = "The data (" & g_objs(streamid).ObjName & ") is " & Format$(util, "0.00") & "% full; >TH = " & Cstr(TH_UTIL)  	
+    			MSActions Severity, eventmsg, AKPID, resname, longm 
+		End If
+	End If
+
+continue:
+
+	If DO_DATA = "y" Then
+		If IterationCount() = 1 Then
+			DataHeader "Available data (" & g_objs(streamid).ObjName & ") space^^MB @" & g_objs(streamid).ServName, 0, streamid
+			DataHeader "Data (" & g_objs(streamid).ObjName & ") space util^^% @" & g_objs(streamid).ServName, 0, streamid+1000
+ 		End If
+		DataLog streamid, free, "Avail MB= " & Format$(free, "0.00") & chr$(10) & "Used %= " & Format$(util, "0.00") & chr$(10)
+		DataLog streamid+1000, util, "Avail MB= " & Format$(free, "0.00") & chr$(10) & "Used %= " & Format$(util, "0.00") & chr$(10)
+	End If
+End Sub
+
+Sub DoDynamic()
+ 	Dim longm As String
+   	Dim legend$
+	Dim eventmsg As String
+	Dim resname$
+	Dim I As Long
+	Dim numdb As Long
+	Dim passwd$
+	Dim free As Double
+	Dim util As Double
+	Dim total As Double
+	Dim freeErrorCode As Long
+	Dim freeErrorMsg As String
+	Dim utilErrorCode As Long
+	Dim utilErrorMsg As String
+	Dim RetVal As Long
+   	Dim UserName As String
+	Dim label As String
+	Dim num As Long
+	Dim ServName As String
+	Dim dbs As String
+	Dim db As String
+	Dim J As Long
+	Dim ErrorCode As Long
+	Dim ErrorMsg As String
+	Dim	K As Long
+
+	passwd = "" 
+	UserName = UName
+	For I = 1 To g_objcnt
+		label = "sql$" & g_objs(I).ServName
+		RetVal = GetContextEx ("label", label, "sub-label", UserName, "val1", passwd)
+
+		' Get the database names.
+		ServName = g_objs(I).ServName
+		dbs = SQL.DbName3(ServName, UserName, passwd, ErrorCode, ErrorMsg)
+
+		If ErrorCode = -1 Then
+			freeErrorCode = ErrorCode
+			utilErrorCode = 0
+			resname = "SQLT_DatabaseF = #" & g_objs(1).ObjId & ":" & g_objs(1).FullObj
+			DynamicDataEvent resname, db, free, util, freeErrorCode, ErrorMsg, utilErrorCode, ErrorMsg, ServName, g_objs(I).ServName & db
+		End If
+
+		num = ItemCount(dbs, ",")
+		num = num - 1
+
+		For J = 1 To num
+			db = Item$(dbs, J,, ",")
+			For K = 1 To ExcludeItems
+				If StrComp(db, Item$(EXCLUDE, K,, ","), 1) = 0 Then GoTo SkipThisDb
+			Next K
+			
+			free = Space.DataSpaceAvailValue3(ServName, UserName, passwd, db, total, util, freeErrorCode, freeErrorMsg)
+			utilErrorCode = 0
+			resname = "SQLT_DatabaseF = #" & g_objs(I).ObjId & ":" & g_objs(I).FullObj
+			DynamicDataEvent resname, db, free, util, freeErrorCode, freeErrorMsg, utilErrorCode, utilErrorMsg, ServName, g_objs(I).ServName & db
+ SkipThisDb:
+
+		Next J
+   	Next I
+End Sub
+
+Function MyGetProgID (progid As String) As String
+	Dim version As String
+
+	MCVersion "netiqmc.exe", version
+	If version < "3.0" Then
+		MyGetProgID = progid
+	Else
+		MyGetProgID = MCGetMOID (progid,AppManID)
+	End If
+End Function
+
+Sub Main()
+ 	Dim longm As String
+   	Dim legend$
+	Dim eventmsg As String
+	Dim resname$
+	Dim I As Long
+	Dim numdb As Long
+	Dim passwd$
+	Dim free As Double
+	Dim util As Double
+	Dim total As Double
+	Dim freeErrorCode As Long
+	Dim freeErrorMsg As String
+	Dim utilErrorCode As Long
+	Dim utilErrorMsg As String
+	Dim RetVal As Long
+   	Dim UserName As String
+	Dim label As String
+	Dim progid As String	
+
+	progid = MyGetProgId("NetiQAgent.SQL")
+	Set SQL = CreateObject(progid)
+	Set Space =  SQL.Space
+
+	If IterationCount() = 1 Then
+		' Get the qsqla.dll version.
+		version = ""
+		MCVersion "qsqla.dll", version
+
+		dynamicDb = False
+		If version >= V3 And DYNAMIC = "y" And SQLT_DatabaseF <> "" Then
+			dynamicDb = True
+		End If
+				
+		If dynamicDb = False Then	
+			' Parse the obj list
+			g_objcnt = ItemCount(SQLT_DatabaseObj, ",")
+			ReDim Preserve g_objs(g_objcnt+1)
+			ParseObj 2, 4, 5, SQLT_DatabaseObj
+		Else
+			' Parse the obj list
+			g_objcnt = ItemCount(SQLT_DatabaseF, ",")
+			ReDim Preserve g_objs(g_objcnt+1)
+			ParseObj 2, 3, 4, SQLT_DatabaseF
+
+			If EXCLUDE = "" Then
+				ExcludeItems = 0
+			Else
+				ExcludeItems = ItemCount(EXCLUDE, ",")
+			End If
+		End If
+
+	End If
+  
+	If dynamicDb = True Then
+		DoDynamic 
+		Exit Sub
+	End If
+
+	passwd = "" 
+	If version < V3	Then
+		UserName = "sa"
+	   	' Get the user's password 
+		RetVal = GetContext("sql", "user", UserName, "passwd", passwd)	
+		For I = 1 To g_objcnt
+			free = Space.DataSpaceAvailValue(UserName, passwd, g_objs(I).ObjName, freeErrorCode, freeErrorMsg)
+			util = Space.DataSpaceUtilValue(UserName, passwd, g_objs(I).ObjName, utilErrorCode, utilErrorMsg)
+
+			resname = "SQLT_DatabaseObj = #" & g_objs(I).ObjId & ":" & g_objs(I).FullObj
+			DataEvent resname, free, util, freeErrorCode, freeErrorMsg, utilErrorCode, utilErrorMsg, I
+   		Next I
+   	Else
+		UserName = UName
+		For I = 1 To g_objcnt
+			label = "sql$" & g_objs(I).ServName
+			RetVal = GetContextEx ("label", label, "sub-label", UserName, "val1", passwd)
+			free = Space.DataSpaceAvailValue3(g_objs(I).ServName, UserName, passwd, g_objs(I).ObjName, total, util, freeErrorCode, freeErrorMsg)
+			utilErrorCode = 0
+			resname = "SQLT_DatabaseObj = #" & g_objs(I).ObjId & ":" & g_objs(I).FullObj
+			DataEvent resname, free, util, freeErrorCode, freeErrorMsg, utilErrorCode, utilErrorMsg, I
+   		Next I
+ 
+   	End If
+
+End Sub
+'### End KPS Section
