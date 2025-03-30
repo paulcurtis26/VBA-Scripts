@@ -1,0 +1,350 @@
+'### Copyright (c) 1996-1999 NetIQ Corp. All rights reserved.
+'### 
+'### AD_SSIKDCRequests.ks
+'###
+'### Monitors the number of requests serviced by KDC per second. 
+'### 
+
+'$Revision: 9 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.1.10.0.9"
+Const KSVerID = "1.0"
+'### End KP-Version Section
+
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors the Active Directory Key Distribution Center (KDC) requests.
+'### End KP-Status Section
+
+
+'### Begin KPC Section
+'KPC = ThirtyM
+'### End KPC Section
+
+
+'### Begin Type Section
+Const NT_ADServer = ""
+'### End Type Section
+
+
+'### Begin KPP Section
+'[V<CPReady.Monitors the number of Active Directory requests serviced by KDC per sec. If either the number of Auth Service or the number of Ticket Granting Service requests per second exceeds the threshold you set, an event is raised.(Version 3.4)> V]
+Const DO_EVENT = "y"		'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"			'[M<Collect data? (y/n)>M] [T<String,1,,"yn">T]
+Const TH_UTIL1 = 5			'[M<Authentication Service requests per second > >M] [T<Integer,,, ,, #>T]
+Const TH_UTIL2 = 4			'[M<Ticket Granting Service requests per second > >M] [T<Integer,,, ,, #>T]
+Const DO_NUMBERS = "y" 		'[M<Show numbers? (y/n)>M][T<string,1,' ',yn">T]
+Const Severity = 8			'[M<Event severity level>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Sev_Normal = 40		'[M<Event Severity - Normal>M] [T<Integer,,,1, 40, SevLevel>T]
+Const SEND_NORMAL = "y"		'[M<Send Mesage When No Requests are Normal (AutoClear Message) ? (y/n)>M] [T<String,1,,"yn">T]
+Const DEBUG  = "n"   		'[M<Write Debug File? (y/n)>M] [T<String,1, ,"yn">T]
+'[A<When the threshold is exceeded, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+
+Option Base 1
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Dim EventFiredAS As Boolean
+Dim EventFiredTGS As Boolean
+Dim Machinenamestr As String
+
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+
+Const UNITNUMBER = "^^#"
+Const OBJNAME = "NTDS"
+Const CNTName =	"KDC AS Requests"
+Const CNT2Name = "KDC TGS Requests"
+
+Dim NT As Object		' Keep the reference count of this DLL
+Dim OBJ As Object		' Keep the reference count of this DLL
+Const resname = "NT_ADServer = " & NT_ADServer
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+Function MyGetProgID (progid As String) As String
+	Dim version As String
+
+	MCVersion "netiqmc.exe", version
+	If version < "3.0" Then
+		MyGetProgID = progid
+	Else
+		MyGetProgID = MCGetMOID (progid,AppManID)
+	End If
+End Function
+
+
+Sub Main()
+	On Error GoTo main_error
+	If Iterationcount() =1 Then	
+		Openfilefail = false
+	End If
+
+	Dim dval1 As Double
+	Dim dval2 As Double
+	Dim longmsg As String
+	Dim shortmsg As String
+	Dim progid$
+	Dim ObjectName As String
+	Dim Counter As String
+	Dim Instance As String
+
+
+	If IterationCount() = 1 Then
+
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+	    MachineName1 = Space$(16)
+    	NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+
+		Machinenamestr = lcase(trim(Machinenamestr))
+
+		EventFiredAS = false
+		EventFiredTGS = false
+		progid = MyGetProgId  ("NetiQAgent.NT")
+		Set NT = CreateObject (progid)
+		Set OBJ = NT.System
+	End If
+
+
+	DO_DEBUG = DEBUG
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		KSName=	"AD_SSIKDCRequests" & str(getjobid())
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		If Openfilefail = true And DO_DEBUG = DEBUG Then 
+			eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+			longm = "Openned debug file " &  chr$(10) 
+			longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+			MSActions 40,eventmsg , AKPID, resname, longm
+			Openfilefail = false
+			Print #2 , Now() & "        " & "*********Restart Debugging*********"
+		End If
+	End If
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Getting counter value for " & CNTName
+	End If
+
+	dval1 = Obj.CounterValue(OBJNAME, CNTName, "")
+
+	If dval1 = -1 Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "This KS can only run on Windows 2000 "
+			Print #2 , Now() & "        " & "Domain Controller. Failed On Counter: "
+			Print #2 , Now() & "        " & OBJNAME & "::" & CNTName 
+			Close #2
+		End If
+		Err.Description = "This KS can only run on Windows 2000 Domain Controller. Failed on Counter: " & OBJNAME & "::" & CNTName 
+		Err.raise 4103	  'raise error to terminate this KS
+	End If
+
+	If IterationCount() = 1 Then
+		If DO_DATA = "y" Then
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "Creating data header for " & CNTName
+				Print #2 , Now() & "        " & "Creating data header for " & CNT2Name
+			End If
+			DataHeader  CNTName  & UNITNUMBER, 0, 0
+			DataHeader  CNT2Name & UNITNUMBER, 0, 1
+		End If
+	End If
+
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Getting counter value for " & CNT2Name
+	End If
+
+	dval2 = Obj.CounterValue(OBJNAME, CNT2Name, "")
+	If dval2 = -1 Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "This KS can only run on Windows 2000 "
+			Print #2 , Now() & "        " & "Domain Controller. Failed On Counter: "
+			Print #2 , Now() & "        " & OBJNAME & "::" & CNT2Name 
+			Close #2
+		End If
+		Err.Description = "This KS can only run on Windows 2000 Domain Controller. Failed on Counter: " & OBJNAME & "::" & CNT2Name 
+		Err.raise 4103	  'raise error to terminate this KS
+	End If
+
+	If DO_EVENT = "y" Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "	Do Eventing"
+		End If
+
+		If dval1 > TH_UTIL1 Then
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "	AS Requests over in Threshold"
+				Print #2 , Now() & "        " & "		Requests 			: " & format(dval1,"0")
+				Print #2 , Now() & "        " & "		Threshold 			: " & TH_UTIL1
+			End If
+			longmsg = "The number of AS requests serviced by KDC per second is " & dval1 & ", over the threshold " & TH_UTIL1 & "."
+			If DO_NUMBERS = "y" Then
+				ShortMsg = Machinenamestr & " AS-REQUESTS EXCEEDED " & format(int(dval1),"0")
+			Else
+				ShortMsg = Machinenamestr & " AS-REQUESTS EXCEEDED NULL"
+			End If
+ 			MSActions Severity,ShortMsg, AKPID, resname, longmsg
+			EventFiredAS = true
+		ElseIf dval1 < TH_UTIL1  Then
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "	AS Requests below in Threshold"
+				Print #2 , Now() & "        " & "		Requests 			: " & format(dval1,"0")
+				Print #2 , Now() & "        " & "		Threshold 			: " & TH_UTIL1
+			End If
+			longmsg = "The number of AS requests serviced by KDC per second is " & dval1 & ", below the threshold " & TH_UTIL1 & "."
+			If DO_NUMBERS = "y" Then
+				ShortMsg = Machinenamestr & " AS-REQUESTS NORMAL " & format(int(dval1),"0")
+			Else
+				ShortMsg = Machinenamestr & " AS-REQUESTS NORMAL NULL"
+			End If
+			If EventFiredAS = true Then
+				If SEND_NORMAL = "y" Then
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & "	Send Normal Event"
+					End If
+		 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+				Else
+					If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & "	Send Normal Event, as action is Command Post"
+						End If
+			 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+					End If
+				End If
+			End If
+			EventFiredAS = false
+		End If
+
+		If dval2 > TH_UTIL2 Then
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "	TGS Requests over in Threshold"
+				Print #2 , Now() & "        " & "		Requests 			: " & format(dval2,"0")
+				Print #2 , Now() & "        " & "		Threshold 			: " & TH_UTIL2
+			End If
+			longmsg = "The number of TGS requests serviced by KDC per second is " & dval2 & ", over the threshold " & TH_UTIL2 & "."
+			If DO_NUMBERS = "y" Then
+				ShortMsg = Machinenamestr & " TGS-REQUESTS EXCEEDED " & format(int(dval1),"0")
+			Else
+				ShortMsg = Machinenamestr & " TGS-REQUESTS EXCEEDED NULL"
+			End If
+ 			MSActions Severity,ShortMsg, AKPID, resname, longmsg
+			EventFiredTGS = true
+		ElseIf dval2 < TH_UTIL2 Then
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "	TGS Requests Below in Threshold"
+				Print #2 , Now() & "        " & "		Requests 			: " & format(dval2,"0")
+				Print #2 , Now() & "        " & "		Threshold 			: " & TH_UTIL1
+			End If
+			longmsg = "The number of TGS requests serviced by KDC per second is " & dval2 & ", below the threshold " & TH_UTIL2 & "."
+			If DO_NUMBERS = "y" Then
+				ShortMsg = Machinenamestr & " TGS-REQUESTS NORMAL " & format(int(dval1),"0")
+			Else
+				ShortMsg = Machinenamestr & " TGS-REQUESTS NORMAL NULL"
+			End If
+			If EventFiredTGS = true Then
+				If SEND_NORMAL = "y" Then
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & "	Send Normal Event"
+					End If
+		 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+				Else
+					If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & "	Send Normal Event, as action is Command Post"
+						End If
+			 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+					End If
+				End If
+			End If
+			EventFiredTGS = false
+		End If
+	End If
+
+	If DO_DATA = "y" Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Writing data value for AS Requests Value : " & dval1
+			Print #2 , Now() & "        " & "Writing data value for TGS Requests Value : " & dval2
+		End If
+
+        DataLog 0, int(dval1), ""
+        DataLog 1, int(dval1), ""
+	End If
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Checking KDC Requests"
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resname,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+
+End Sub
+
+'### End KPS Section

@@ -1,0 +1,894 @@
+'### Copyright (c) 1998 - 1999 NetIQ Corp. All rights reserved.
+'### 
+'### AMAdmin_AgentPreInstall
+'###
+'###
+
+'$Revision: 13 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.422.4.13"
+Const KSVerID = "1.0"
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 1
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'IamInstall = 1				' Installation KS
+'Description = Runs pre-installation check remotely.
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = OneTime
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""             'Drop on machine object
+'### End Type Section
+
+'### Begin KPP Section
+'[V<Checks the remote machine environment for potential agent installation problems. The MS you're using and remote machine must be in the same domain or trusted domains. A severe event is raised when the pre-installation check fails on any remote machine
+Const DO_EVENT = "y" 	'[M<Raise Event When Complete? (y/n)>M] [T<String,1,,"yn">T]
+Const Severity = 25		'[M<Event Severity When Complete>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Domain = ""		'[M<Domain of remote user>M] [T<Req_String,128,'^',>T]
+Const User = "netiq"			'[M<User for remote pre-installation check>M] [T<Req_String,128,'^',>T]
+Const Password = "netiq"	    '[M<Password of remote user>M][T<string,32,'^',"">T][I<I_EDIT(2)>I]
+Const TempDirssi = "c:\temp\agtcheck"		'[M<Temporary directory (target machine)>M] [T<Req_String,128,'^',>T] 
+Const ResultPathssi = "c:\netiq\temp"      '[M<Path for resulting report (management server machine)>M][T<Req_String,128,'^',"">T]
+Const DO_HTML = "y"              '[M<Create full report in HTML?>M][T<string,1,' ',"yn">T]
+Const DO_TEXT = "n"              '[M<Create full report in text file?>M][T<string,1,' ',"yn">T]
+Const InstallPathssi = "c:\netiq"   '[M<Planned Install Path (target machine)>M][T<Req_String,128,'^',"">T]
+Const DO_EXCH = "n"              '[M<*Check Exchange? (y/n)>M][T<string,1,' ',"yn">T]
+Const DO_SQL = "n"               '[M<*Check SQL? (y/n)>M][T<string,1,' ',"yn">T]
+Const SqlSaPwd = ""              '[M< Local sa Password>M][T<string,32,'^',"">T][I<I_EDIT(2)>I]
+Const DO_CIM = "n"               '[M<*Check CIM? (y/n)>M][T<string,1,' ',"yn">T]
+Const CimCommunity = "public"    '[M< SNMP Community>M][T<string,40,' ',"">T]
+Const DO_IIS = "n"               '[M<*Check IIS? (y/n)>M][T<string,1,' ',"yn">T]
+Const DO_MSMQ = "n"              '[M<*Check Message Queue Server? (y/n)>M][T<string,1,' ',"yn">T]
+Const MsmqSaPwd = ""             '[M< Local sa Password>M][T<string,32,'^',"">T][I<I_EDIT(2)>I]
+Const DO_MSCS = "n"              '[M<*Check Cluster Server? (y/n)>M][T<string,1,' ',"yn">T]
+Const DO_MTS = "n"               '[M<*Check Transaction Server? (y/n)>M][T<string,1,' ',"yn">T]
+Const DO_PROXY = "n"             '[M<*Check Proxy Server? (y/n)>M][T<string,1,' ',"yn">T]
+Const HpnsCommunity = "public"   '[M< SNMP Community>M][T<string,40,' ',"">T]
+Const DO_WBEM = "n"				 '[M<*Check WMI? (y/n)>M][T<string,1,' ',"yn">T]
+Const DO_WINFRAME = "n"          '[M<*Check Citrix WinFrame Server? (y/n)>M][T<string,1,' ',"yn">T]
+Const DO_WTS = "n"               '[M<*Check WTS Server? (y/n)>M][T<string,1,' ',"yn">T]
+Const DO_BKEXEC = "n"			 '[M<*Check Backup Exec Server? (y/n)>M][T<string,1,' ',"yn">T]
+Const DO_SNA = "n" 			   	 '[M<*Check SNA Server? (y/n)>M][T<string,1,' ',"yn">T]
+Const DO_WLBS = "n" 		   	 '[M<*Check Windows Load Balancing Server? (y/n)>M][T<string,1,' ',"yn">T]
+
+
+
+'[A<When the event is turned on and is encountered, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action taken>M]
+'### End KPP Section
+
+
+'### Begin KPS Section
+
+
+
+Const DO_SMS = "n"               
+Const SmsSqlServer = ""			 
+Const SmsSaPwd = ""              
+Const DO_LOTUS = "n"             
+Const DO_HPNS = "n"              
+Const DO_DELL = "n"              
+Const DO_ORACLE = "n"            
+Const DO_ARCSERVE = "n"			 
+Const DO_NETFIN = "n"			 
+Const NetfinCommunity = "public" 
+Const DO_LEGATO = "n"			 
+Const DO_SITESVR = "n"			 
+Const DO_SIEMS = "n" 		   	 
+
+Function RemoveLastSlash(filename As String) As String
+
+If right(filename,1) = "\" Then
+	RemoveLastSlash = left(filename,Len(filename)-1)
+Else
+	RemoveLastSlash = trim(filename)
+End If
+
+End Function
+
+
+Type PROCESS_INFO
+	hProcess As Long
+	hThread As Long
+	dwProcessId As Long
+	dwThreadId As Long
+End Type
+
+Type STARTUPINFO
+	cb As Long
+	lpReserved As String
+	lpDesktop As String
+	lpTitle As String
+	dwX As Long
+	dwY As Long
+	dwXSize As Long
+	dwYSize As Long
+	dwXCountChars As Long
+	dwYCountChars As Long
+	dwFillAttribute As Long
+	dwFlags As Long
+	wShowWindow As Integer
+	cbReserved2 As Integer
+	lpReserved2 As Long
+	hStdInput As Long
+	hStdOutput As Long
+	hStdError As Long
+End Type
+
+Declare Function CreateProcess Lib "kernel32" Alias _
+	"CreateProcessA" (ByVal lpApplicationName As String, _
+		ByVal lpCommandLine As String, _
+		ByVal lpProcessAttributes As Any, _
+      	ByVal lpThreadAttributes As Any, _
+		ByVal bInheritHandles As Long, _
+      	ByVal dwCreationFlags As Long, _
+		ByVal lpEnvironment As Any, _
+		ByVal lpCurrentDirectory As String, _
+		lpStartupInfo As STARTUPINFO, _
+      	lpProcessInformation As PROCESS_INFO) As Boolean
+
+Declare Sub CloseHandle Lib "kernel32.dll" Alias _
+	"CloseHandle" (ByVal hObject As Long) 
+
+Declare Function WaitForSingleObject Lib "kernel32.dll" Alias _
+	"WaitForSingleObject" (ByVal hHandle As Long, _
+		ByVal dwMilliSec As Long) As Long
+
+Declare Function GetExitCodeProcess Lib "kernel32.dll" Alias _
+	"GetExitCodeProcess" (ByVal hProcess As Long, _
+		ExitCode As Long) As Boolean
+
+Declare Function GetCurrentThreadId Lib "kernel32.dll" Alias _
+	"GetCurrentThreadId" () As Long
+
+Const NORMAL_PRIORITY_CLASS = &H20&
+Const STARTF_USESHOWWINDOW  = &H1&
+Const STARTF_USESTDHANDLES  = &H100&
+Const SW_HIDE       = &H0&
+Const INFINITE      = &HFFFFFFFF&
+Const STILL_ACTIVE  = &H103&
+Const WAIT_FAILED   = &HFFFFFFFF&
+Const WAIT_OBJECT_0 = &H0&
+
+
+'
+'  win32 registry functions
+'
+Global Const REG_SZ As Long = 1
+Global Const REG_DWORD As Long = 4 
+Global Const HKEY_CLASSES_ROOT = &H80000000 
+Global Const HKEY_CURRENT_USER = &H80000001 
+Global Const HKEY_LOCAL_MACHINE = &H80000002 
+Global Const HKEY_USERS = &H80000003 
+Global Const ERROR_NONE = 0 
+Global Const ERROR_BADDB = 1 
+Global Const ERROR_BADKEY = 2 
+Global Const ERROR_CANTOPEN = 3 
+Global Const ERROR_CANTREAD = 4 
+Global Const ERROR_CANTWRITE = 5 
+Global Const ERROR_OUTOFMEMORY = 6 
+Global Const ERROR_INVALID_PARAMETER = 7 
+Global Const ERROR_ACCESS_DENIED = 8 
+Global Const ERROR_INVALID_PARAMETERS = 87 
+Global Const ERROR_NO_MORE_ITEMS = 259 
+Global Const KEY_ALL_ACCESS = &H3F 
+Global Const KEY_READ       = &H19
+
+
+Declare Function RegCloseKey Lib "advapi32.dll" _ 
+		(ByVal hKey As Long) As Long 
+Declare Function RegOpenKeyEx Lib "advapi32.dll" Alias _ 
+		"RegOpenKeyExA" (ByVal hKey As Long, ByVal lpSubKey As String, _ 
+		ByVal ulOptions As Long, ByVal samDesired As Long, ByRef phkResult As Long) As Long 
+Declare Function RegQueryValueExString Lib "advapi32.dll" Alias _ 
+		"RegQueryValueExA" (ByVal hKey As Long, ByVal lpValueName As _ 
+		String, ByVal lpReserved As Long, lpType As Long, ByVal lpData _
+		As String, lpcbData As Long) As Long 
+
+Declare Function RegConnectRegistry Lib "advapi32.dll" Alias _
+                "RegConnectRegistryA" (ByVal lpMachineName As String, ByVal hkey As Long, _
+                ByRef phkResult As Long) As Long 
+
+Function GetPlatformInfo() As String
+	Dim lRetVal&, hKey&, hKeyServer&, ValLen&, DataName$, DataLen&, rc&
+	
+	GetPlatformInfo = ""
+    lRetVal  = RegConnectRegistry("\\"&NT_MachineFolder, HKEY_LOCAL_MACHINE, hKeyServer)
+	If (lRetVal <> ERROR_NONE) Then 
+		errormsg = "Failed on connecting to machine - " & NT_MachineFolder
+	    GoTo Out 
+	End If
+	lRetVal = RegOpenKeyEx(hKeyServer, "SYSTEM\CurrentControlSet\Control\Session Manager\Environment", 0, _
+		KEY_READ, hKey)
+
+	DataLen = 256
+	DataName = String$(DataLen, 0)	
+	lRetVal = RegQueryValueExString(hKey, "Processor_Architecture", 0&, REG_SZ, DataName, DataLen)
+	If (lRetVal <> ERROR_NONE) Then
+		GoTo OUT
+	End If
+	DataName = Left$(DataName, DataLen-1)
+	DataName = Trim$(DataName)
+	GetPlatformInfo = DataName
+OUT:
+	lRetVal = RegCloseKey (hKey)
+	lRetVal = RegCloseKey (hKeyServer)
+End Function
+
+
+'
+'
+'
+Const InstallMgrCmd = "nqsms_m.exe"
+Const Quo = """"				
+Const NL = chr$(10)	 			' newline
+Const CR = chr$(13)	 			' newline
+Const DOLLAR_STR = "$"
+Const BKSLASH = "\"
+Const DBBKSLASH = "\\"
+
+
+Dim sInstallPath As String
+Dim OSVersionHost As String 		'crs 8219
+Dim OSVersionTarget As String 		'crs 8219
+Dim sCPUType As String
+Dim targetDiskSpace As Long				'crs 8402
+
+'
+'  return TRUE if error string found
+'
+Function GetResultData (ByVal dwProcessId As Long, ByRef sResultData As String)	_
+		As Boolean
+	Dim sDataFile As String
+	Dim sDataLine As String
+
+	sResultData = ""
+	GetResultData = FALSE	
+	If (dwProcessId = 0)  Then
+		GoTo OUT
+	End If
+	'
+	'  +++ cache
+	'	 
+	'sEnvironTemp = Environ("TEMP")
+	sDataFile = sInstallPath + "\nqsms" + Cstr(dwProcessId) + ".txt" 
+	If (Not FileExists(sDataFile))  Then
+		GoTo OUT
+	End If
+	Open sDataFile For Input As #9
+	While Not EOF(9)
+		Line Input #9, sDataLine
+		If (InStr(1, sDataLine, "error", 1)) Then
+			 GetResultData =  TRUE
+		End If
+		sResultData = sResultData & NL & sDataLine
+	Wend
+	Close #9
+	kill sDataFile
+OUT:
+	Exit Function
+End Function
+
+
+
+'
+'	0 success
+'	> 0 fail
+'
+Function RunCmd (ByVal cmdLine As String, ByRef dwProcessId As Long) As Long
+	Dim pInfo As PROCESS_INFO
+	Dim sInfo As STARTUPINFO
+	Dim sNull As String
+	Dim success As Boolean
+ 	Dim ret As Long
+	Dim exitCode As Long
+	Dim errormsg As String
+	Dim eventmsg As String
+	Dim resname As String
+	Dim fileSize As Integer
+	Dim errorOut As Boolean
+	
+	resname = "NT_MachineFolder = " & NT_MachineFolder
+	success = True
+   	sInfo.dwFlags = STARTF_USESHOWWINDOW
+	sInfo.wShowWindow = SW_HIDE
+	sInfo.cb = Len(sInfo)
+	success = CreateProcess (sNull, cmdLine, 0&, 0&, 0&, NORMAL_PRIORITY_CLASS, _
+		0&, sNull, sInfo, pInfo)
+	If (success = FALSE) Then
+		errormsg = "Failed to create process"
+		dwProcessId = 0
+		MSActions 5, eventmsg, AKPID, resname, errormsg
+		RunCmd = 1024
+		Exit Function
+	End If
+	dwProcessId = pInfo.dwProcessID
+	'ret = WaitForSingleObject (pInfo.hProcess, INFINITE) 'for debug mode
+	'If (ret <> WAIT_OBJECT_0) Then						  'for debug mode
+	ret = MCWaitForObject(TRUE, pInfo.hProcess)
+	If (ret = 0) Then
+		' Failed.
+		errormsg = "Failed to wait process with " & ret
+		success = FALSE
+		GoTo OUT
+	End If
+	success = GetExitCodeProcess(pInfo.hProcess, exitCode)
+	If (FALSE = success) Then
+		errormsg = "Failed to obtain process exit code"
+		GoTo OUT
+	End If
+   	RunCmd = exitCode
+	targetDiskSpace = exitCode				'crs 8402
+	
+OUT:
+	If (success = FALSE) Then
+		MSActions 5, eventmsg, AKPID, resname, errormsg
+		RunCmd = 1024
+	End If
+	CloseHandle (pInfo.hProcess)
+	CloseHandle (pInfo.hThread)
+End Function
+'
+'
+Function GetInstallPath() As String
+	Dim lRetVal&, hKey&, ValLen&, DataName$, DataLen&, rc&
+	
+	GetInstallPath = ""
+	lRetVal = RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\NetIQ\AppManager", 0, _
+		KEY_ALL_ACCESS, hKey)
+	If (lRetVal <> ERROR_NONE) Then
+		GoTo OUT
+	End If
+	DataLen = 256
+	DataName = String$(DataLen, 0)	
+	lRetVal = RegQueryValueExString(hKey, "InstallPath", 0&, REG_SZ, DataName, DataLen)
+	If (lRetVal <> ERROR_NONE) Then
+		GoTo OUT
+	End If
+	DataName = Left$(DataName, DataLen-1)
+	DataName = Trim$(DataName)
+	GetInstallPath = DataName
+OUT:
+	lRetVal = RegCloseKey (hKey)
+End Function
+
+Function ModifyPassword (ByVal pwd As String) As String
+	Dim I As Long
+	Dim dwCount As Long
+	Dim szPassword As String
+
+	dwCount = ItemCount(pwd,"%")
+	For	I = 1 To dwCount
+		szPassword = szPassword & Item$(pwd,I,I,"%")
+		If (i < dwCount) Then
+			szPassword = szPassword & "%%"
+		End If
+	Next I
+	
+	ModifyPassword = szPassword
+End Function
+
+'
+' Generate the .iss files
+'	
+Function CreateBatFile (ByVal path As String, ByVal sFileName As String) As Boolean
+	' Create the iss file
+	Dim FileNum%
+	Dim szOutput As String
+	Dim szHtml As String
+	Dim szText As String
+	Dim szPwd As String
+   	Dim szCPUType As String
+
+	If ( UCase$(sCPUType) = "X86" ) Then
+		szCPUType=""
+	ElseIf ( UCase$(sCPUType) = "ALPHA") Then
+		szCPUType="a"
+	End If
+	
+	If (DO_HTML = "y") Then
+		szOutput = " -html"
+	End If
+	If (DO_TEXT = "y") Then
+		szOutput = szOutput & " -text"
+	End If
+
+	szOutput = szOutput & " -opath " & path
+
+	On Error GoTo ERROUT
+	FileNum = FreeFile
+	Open sFileName For Output As #FileNum	
+
+	Print #FileNum, Quo & path & szCPUType & "ckGen" & Quo & " -new " & szOutput
+	Print #FileNum, Quo & path & szCPUType & "ckMc" & Quo & " -ipath " & QUO & InstallPath & Quo & szOutput
+	If (DO_CIM = "y") Then
+		Print #FileNum, Quo & path & szCPUType & "ckCim" & Quo & " -com " & CimCommunity & szOutput
+	End If
+	If (DO_WINFRAME = "y") Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckCws" & Quo & szOutput
+		End If
+	End If
+	If (DO_DELL = "y") Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckDell" & Quo & szOutput
+		End If
+	End If
+	If (DO_EXCH = "y") Then
+		Print #FileNum, Quo & path & szCPUType & "ckExch" & Quo & szOutput
+	End If
+	If (DO_LOTUS = "y") Then
+		Print #FileNum, Quo & path & szCPUType & "ckDom" & Quo & szOutput
+	End If
+	If (DO_HPNS = "y") Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckHpns" & Quo & " -com " & HpnsCommunity & szOutput
+		End If
+	End If
+	If (DO_IIS = "y") Then
+		Print #FileNum, Quo & path & szCPUType & "ckIis" & Quo & szOutput
+	End If
+	If (DO_MSCS = "y") Then
+		Print #FileNum, Quo & path & szCPUType & "ckMscs" & Quo & szOutput
+	End If
+	If (DO_MSMQ = "y") Then
+		szPwd = ModifyPassword (MsmqSaPwd)
+		Print #FileNum, Quo & path & szCPUType & "ckMsmq" & Quo & " -pwde " & Quo & szPwd & Quo & szOutput
+	End If
+	If (DO_MTS = "y") Then
+		Print #FileNum, Quo & path & szCPUType & "ckMts" & Quo & szOutput
+	End If
+	If (DO_ORACLE = "y") Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckOracle" & Quo & szOutput
+		End If
+	End If
+	If (DO_PROXY = "y") Then
+		Print #FileNum, Quo & path & szCPUType & "ckProxy" & Quo & szOutput
+	End If
+	If (DO_SMS = "y") Then
+		szPwd = ModifyPassword (SmsSaPwd)
+		Print #FileNum, Quo & path & szCPUType & "ckSms" & Quo & " -s " & SmsSqlServer & " -pwde " & Quo & szPwd & Quo & szOutput
+	End If
+	If (DO_SQL = "y") Then
+		szPwd = ModifyPassword (SqlSaPwd)
+		Print #FileNum, Quo & path & szCPUType & "ckSql" & Quo & " -pwde " & Quo & szPwd & Quo & szOutput
+	End If
+	If (DO_WBEM  = "y") Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckWmi" & Quo & szOutput
+		End If
+	End If
+	If (DO_WTS = "y") Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckWts" & Quo & szOutput
+		End If
+	End If
+	If DO_ARCSERVE = "y" Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckARCserve" & Quo & szOutput
+		End If
+	End If
+	If DO_BKEXEC = "y" Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckBKExec" & Quo & szOutput
+		End If
+	End If
+	If DO_NETFIN = "y" Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckNetfin" & Quo & " -com " & HpnsCommunity & szOutput
+		End If
+	End If
+	If DO_LEGATO = "y" Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckNK" & Quo & szOutput
+		End If
+	End If
+	If DO_SITESVR = "y" Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckSiteserver" & Quo & szOutput
+		End If
+	End If
+	If DO_SNA = "y" Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckSna" & Quo & szOutput
+		End If
+	End If
+	If DO_WLBS = "y" Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckWlbs" & Quo & szOutput
+		End If
+	End If
+	If DO_SIEMS = "y" Then
+		If ( UCase$(sCPUType) = "X86") Then
+			Print #FileNum, Quo & path & szCPUType & "ckSiems" & Quo & szOutput
+		End If
+	End If
+	
+  	Close #FileNum
+	On Error GoTo 0
+	CreateBatFile = TRUE
+	Exit Function
+ERROUT:
+	Dim resname As String
+
+	resname = "NT_MachineFolder = " & NT_MachineFolder
+   	MSActions 5, "", AKPID, resname, Err.Description
+End Function
+
+Function GetOSVersion (ByRef osHost As String, ByRef osTarget As String) As Boolean	'crs 8219
+	Dim lRetVal&, hKey&, hKeyServer&, DataName$, DataLen&
+	'get host os version
+   	lRetVal = RegOpenKeyEx(HKEY_LOCAL_MACHINE, "Software\Microsoft\Windows NT\CurrentVersion", 0, _
+		KEY_READ, hKey)
+	
+	DataLen = 256
+	DataName = String$(DataLen, 0)	
+	lRetVal = RegQueryValueExString(hKey, "CurrentVersion", 0&, REG_SZ, DataName, DataLen)
+	If (lRetVal <> ERROR_NONE) Then
+		GoTo OUT
+	End If
+	DataName = Left$(DataName, DataLen-1)
+	DataName = Trim$(DataName)
+	osHost = DataName
+	lRetVal = RegCloseKey (hKey)
+
+	'get target os version
+	DataName=""
+    lRetVal  = RegConnectRegistry("\\" & NT_MachineFolder, HKEY_LOCAL_MACHINE, hKeyServer)
+	If (lRetVal <> ERROR_NONE) Then 
+	    GoTo Out 
+	End If
+	lRetVal = RegOpenKeyEx(hKeyServer, "Software\Microsoft\Windows NT\CurrentVersion", 0, _
+		KEY_READ, hKey)
+	 
+	DataLen = 256
+	DataName = String$(DataLen, 0)	
+	lRetVal = RegQueryValueExString(hKey, "CurrentVersion", 0&, REG_SZ, DataName, DataLen)
+	If (lRetVal <> ERROR_NONE) Then
+		GoTo OUT
+	End If
+	DataName = Left$(DataName, DataLen-1)
+	DataName = Trim$(DataName)
+	osTarget = DataName
+	
+OUT:
+	lRetVal = RegCloseKey (hKey)
+	lRetVal = RegCloseKey (hKeyServer)
+
+End Function
+
+Function GetXcopy (ByVal osVersion As String) As String	'crs 8219
+	Dim XcopyCmd As String
+
+	If osVersion = "5.0" Then
+		XcopyCmd = "cmd /c xcopy /q /y " 
+	ElseIf osVersion = "4.0" Then
+		XcopyCmd = "cmd /c xcopy /q "
+	Else
+		XcopyCmd = "cmd /c xcopy /q " 
+	End If
+
+	GetXcopy = XcopyCmd		 
+End Function
+
+'
+Sub Main()
+	Dim bRet As Long
+	Dim cmdLine As String
+	Dim sTempDir As String
+  	Dim ret As String
+	Dim errorOut As Boolean
+	Dim sUNC As String
+	Dim errormsg As String
+	Dim eventmsg As String
+	Dim resname As String
+	Dim dwProcessId As Long
+   	Dim sResultData As String
+	Dim bRc As Boolean
+   	Dim sDetailMessage As String
+	Dim sEventMessage As String	
+	Dim bError As Boolean
+	Dim bWarning As Boolean
+	Dim nSleep As Long
+	Dim cmdParam As String
+	Dim batFile As String
+	Dim sResultDir As String
+	Dim tUNC As String
+	Dim diskSpaceTemp As Long
+	Dim tempSpaceWarning As String
+	Dim cmdXcopyHost As String	'crs 8219
+	Dim cmdXcopyTarget As String	'crs 8219
+	Dim getOSError As Boolean		'crs 8219
+	Dim nqsms_mCmd As String 		'crs 8402	
+	
+	TempDir=RemoveLastSlash(TempDirssi) & "\"
+	ResultPath=RemoveLastSlash(ResultPathssi) & "\"
+	InstallPath=RemoveLastSlash(InstallPathssi) & "\"
+
+	sCPUType = GetPlatformInfo()	
+	sInstallPath = GetInstallPath()
+	 getOSError = GetOSVersion(OSVersionHost,OSVersionTarget)	'crs 8219 'getOSError does not contain return code
+
+	tempSpaceWarning = ""
+	sDetailMessage = ""
+  	eventmsg = "Agent Pre-Install check failed"
+	'
+	'  x msec delay between setup 
+	'
+	nSleep = 30000
+	bError = FALSE
+	bWarning = FALSE
+   	resname = "NT_MachineFolder = " & NT_MachineFolder
+
+	x% = ItemCount(TempDir," ")
+	If x% > 1 Then
+		errormsg = "Please specify a temporary directory that does not contain a space"
+		GoTo OUT
+	End If
+
+	'
+	'	Sanity check
+	'
+    On Error GoTo OUT
+    errormsg = "Cannot access the specified temp or install directory on target machine." & CR & NL & _
+			   "Verify the target machine is running and the specified paths are valid." & CR & NL & _
+			   "Verify NetIQmc and NetIQccm services on the management machine are running as an NT account with permission to access the specified paths on the target machine."
+
+	' Check the disk space of the remote machine. If not enough, then abort here.
+	'diskSpaceTemp = DiskFree ("\\" & NT_MachineFolder & "\" & Mid$(TempDir,1,1) & "$")
+
+	'If (diskSpaceTemp >= 0 And diskSpaceTemp < 20971520) Then
+	'	tempSpaceWarning = "Warning: Not enough disk space on temp drive for setup." & CR & NL & _
+	'					   "The temporary setup files require at least 20 MB free."
+	'End If
+	
+	nqsms_mCmd = Quo & GetInstallPath() & BKSLASH & "bin\nqsms_m.exe" & Quo
+	lRet = RunCmd(nqsms_mCmd & " -diskfree " & QUO & DBBKSLASH & NT_MachineFolder & BKSLASH & Mid$(TempDir,1,1) & DOLLAR_STR & QUO, dwProcessId) 	'crs 8402
+	If (lRet = -1)  Then
+		bRc = GetResultData(dwProcessId, sResultData)
+		If (bRc = TRUE)  Then
+			sDetailMessage = errormsg & NL & sResultData	
+		End If
+		bError = TRUE
+		GoTo OUT1
+    End If
+	
+	If (targetDiskSpace >= 0 And targetDiskSpace < 20) Then '20mb	'crs 8402 	'''''If ( >= 0 And diskSpaceTemp < 20971520) Then '20mb
+		tempSpaceWarning = "Warning: Not enough disk space on temp drive for setup." & CR & NL & _
+						   "The temporary setup files require at least 20 MB free."
+		GoTo OUT
+	End If
+	
+	On Error GoTo 0
+
+
+	'		
+	'  append \ to the end of path to make xcopy and del happy
+	'  replace : with $ for driver letter.
+	'
+	If (Mid(TempDir, Len(TempDir), Len(TempDir)) <> "\")  Then
+		sTempDir = TempDir & "\"
+	Else
+		sTempDir = TempDir
+	End If
+	iWhere = InStr(sTempDir, ":")
+	If (iWhere <> 0)  Then
+		tUNC = "\\" & NT_MachineFolder & "\" & Mid(sTempDir, 1, iWhere - 1) & "$" &_
+			Mid(sTempDir, iWhere + 1, Len(sTempDir))
+	Else
+		tUNC = "\\" & NT_MachineFolder & "\" & sTempDir
+	End If
+	sTempDir = sTempDir & "agtcheck\"
+	sUNC = tUNC & "agtcheck\"
+
+	' copy the necessary files over to the remote temp directory
+	lRet = RunCmd("cmd /c md " & QUO & sUNC & QUO, dwProcessId)
+	cmdXcopyHost = GetXcopy(OSVersionHost)
+	If ( UCase$(sCPUType) = "X86" ) Then
+		lRet = RunCmd(cmdXcopyHost & QUO & sInstallPath & "\bin\nqsms_a.exe" & QUO & " " & QUO & sUNC & Quo, dwProcessId) 	
+		lRet = RunCmd(cmdXcopyHost & QUO & sInstallPath & "\bin\check\ck*.exe" & QUO & " " & QUO & sUNC & QUO, dwProcessId)
+		lRet = RunCmd(cmdXcopyHost & QUO & sInstallPath & "\bin\check\PreInstApi.dll" & QUO & " " & QUO & sUNC & QUO, dwProcessId)
+	ElseIf ( UCase$(sCPUType) = "ALPHA") Then
+		lRet = RunCmd(cmdXcopyHost & QUO & sInstallPath & "\bin\nqsms_aa.exe" & QUO & " " & QUO & sUNC & QUO, dwProcessId) 	
+		lRet = RunCmd("cmd /c copy " & QUO & sUNC & "nqsms_aa.exe " & QUO & " " & QUO & sUNC & "nqsms_a.exe" & QUO, dwProcessId)
+		lRet = RunCmd(cmdXcopyHost & QUO & sInstallPath & "\bin\check\ack*.exe" & QUO & " " & QUO & sUNC & QUO, dwProcessId)
+		lRet = RunCmd(cmdXcopyHost & QUO & sInstallPath & "\bin\check\aPreInstApi.dll" & QUO & " " & QUO & sUNC & QUO, dwProcessId)
+		lRet = RunCmd("cmd /c copy " & QUO & sUNC & "aPreInstApi.dll " & QUO & " " & QUO & sUNC & "PreInstApi.dll" & QUO, dwProcessId)
+		MCSleep 2000
+	End If
+	'If ( UCase$(sCPUType) = "X86" ) Then
+	'	lRet = RunCmd("cmd /c xcopy /q " & QUO & sInstallPath & "\bin\nqsms_a.exe" & QUO & " " & QUO & sUNC & Quo, dwProcessId) 	
+	'	lRet = RunCmd("cmd /c xcopy /q " & QUO & sInstallPath & "\bin\check\ck*.exe" & QUO & " " & QUO & sUNC & QUO, dwProcessId)
+	'	lRet = RunCmd("cmd /c xcopy /q " & QUO & sInstallPath & "\bin\check\PreInstApi.dll" & QUO & " " & QUO & sUNC & QUO, dwProcessId)
+	'ElseIf ( UCase$(sCPUType) = "ALPHA") Then
+	'	lRet = RunCmd("cmd /c xcopy /q " & QUO & sInstallPath & "\bin\nqsms_aa.exe" & QUO & " " & QUO & sUNC & QUO, dwProcessId) 	
+	'	lRet = RunCmd("cmd /c copy " & QUO & sUNC & "nqsms_aa.exe " & QUO & " " & QUO & sUNC & "nqsms_a.exe" & QUO, dwProcessId)
+	'	lRet = RunCmd("cmd /c xcopy /q " & QUO & sInstallPath & "\bin\check\ack*.exe" & QUO & " " & QUO & sUNC & QUO, dwProcessId)
+	'	lRet = RunCmd("cmd /c xcopy /q " & QUO & sInstallPath & "\bin\check\PreInstApia.dll" & QUO & " " & QUO & sUNC & QUO, dwProcessId)
+	'	lRet = RunCmd("cmd /c copy " & QUO & sUNC & "PreInstApia.dll " & QUO & " " & QUO & sUNC & "PreInstApi.dll" & QUO, dwProcessId)
+	'	MCSleep 2000
+	'End If
+	
+    If (lRet <> 0) Then
+ 		sDetailMessage = "Error copying setup files over to " & sUNC & CR & NL & _
+					"Verify NetIQmc and NetIQccm services on the management server machine are running as an NT account with permission to access " & sUNC & CR & NL & _
+					"Verify nqexecd is not running on the target machine"
+		bError = TRUE
+		' Terminate the job.
+ 		GoTo OUT1
+    End If
+
+	' create the ini file
+	batFile = NT_MachineFolder & ".bat"
+	lRet = CreateBatFile(sTempDir, sUNC & batFile)
+
+	'
+	' Setup nqexecd service
+	' 
+	cmdLine = InstallMgrCmd & " -agent " & NT_MachineFolder & " "
+	lRet = RunCmd(cmdLine & "-create -path " & QUO & sTempDir & "nqsms_a.exe" & QUO, dwProcessId)
+ 	If (lRet <> 0)  Then 
+ 		MSActions 5, eventmsg, AKPID, resname, "Error: Failed to create nqexecd service"
+		bError = TRUE
+  		GoTo CLEAN_SERVICE
+ 	End If
+	lRet = RunCmd(cmdLine & "-start", dwProcessId)
+	If (lRet <> 0)  Then
+ 		MSActions 5, eventmsg, AKPID, resname, "Error: Failed to start nqexecd service"
+		bError = TRUE
+		GoTo CLEAN_SERVICE
+	End If
+	'
+	'  the user setup will run as
+	'
+	lRet = RunCmd(cmdLine & "-request @TEMP -data " & QUO & TempDir & QUO, dwProcessId)
+	If (lRet = 1)  Then
+		bRc = GetResultData(dwProcessId, sResultData)
+		If (bRc = TRUE)  Then
+			sDetailMessage = sDetailMessage & NL & sResultData	
+		End If
+		bError = TRUE
+		GoTo CLEAN_SERVICE
+    End If
+	
+	lRet = RunCmd(cmdLine & "-request @domain -data " & QUO & Domain & QUO, dwProcessId)
+	If (lRet = 1)  Then
+		bRc = GetResultData(dwProcessId, sResultData)
+		If (bRc = TRUE)  Then
+			sDetailMessage = sDetailMessage & NL & sResultData	
+		End If
+		bError = TRUE
+		GoTo CLEAN_SERVICE
+    End If
+	
+	lRet = RunCmd(cmdLine & "-request @user -data " & QUO & User & QUO, dwProcessId)
+	If (lRet = 1)  Then
+		bRc = GetResultData(dwProcessId, sResultData)
+		If (bRc = TRUE)  Then
+			sDetailMessage = sDetailMessage & NL & sResultData	
+		End If
+		bError = TRUE
+		GoTo CLEAN_SERVICE
+    End If
+	
+	lRet = RunCmd(cmdLine & "-request @passwordee -data " & QUO & Password & QUO, dwProcessId)
+
+	'
+	'  if logon failed, it will happen here...
+	'
+	If (lRet = 1)  Then
+		bRc = GetResultData(dwProcessId, sResultData)
+		If (bRc = TRUE)  Then
+			sDetailMessage = sDetailMessage & NL & sResultData	
+		End If
+		bError = TRUE
+		GoTo CLEAN_SERVICE
+    End If
+
+	'
+	' Run the agent check executables
+	'
+	lRet = RunCmd(cmdLine & "-request " & sTempDir & batFile, dwProcessId)
+    If (lRet <> 0) Then
+		bRc = GetResultData(dwProcessId, sResultData)
+ 		sDetailMessage =  "Error running pre-installation check on target machine." & CR & NL & _
+					"Verify the user account, password and domain in the kpp section are correct and that this user has administrator privileges on the target machine." & CR & NL 
+		' Terminate the job.
+		bError = TRUE
+ 		GoTo CLEAN_SERVICE
+    End If
+
+	
+	' retrieve the resulting files over to the local specified directory
+	If (Mid(ResultPath, Len(ResultPath), Len(ResultPath)) <> "\")  Then
+		sResultDir = ResultPath & "\"
+	Else
+		sResultDir = ResultPath
+	End If
+	'cmdXcopyTarget = GetXcopy(OSVersionTarget)	'crs 8219
+	lRet = RunCmd("cmd /c md " & QUO & sResultDir & QUO, dwProcessId)
+	lRet = RunCmd(cmdXcopyHost & QUO & sUNC & "*.txt" & QUO & " " & QUO & sResultDir & QUO, dwProcessId) 	
+	lRet = RunCmd(cmdXcopyHost & QUO & sUNC & "*.htm" & QUO & " " & QUO & sResultDir & QUO, dwProcessId) 
+    If (lRet <> 0) Then
+ 		sDetailMessage =  "Error copying resulting files from " & sUNC & " over to " & sResultDir & CR & NL & _
+					"Verify NetIQmc and NetIQccm services on the management server are running as an NT account with permission to access " & sUNC & CR & NL
+		' Terminate the job.
+		bError = TRUE
+ 		GoTo CLEAN_SERVICE
+    End If
+
+	'
+	' Examine the resulting error log
+	'
+'	GetErrorLogData sResultDir & sLogName, sReportData
+
+'	If (Len(sReportData) > 0)  Then
+'		sDetailMessage = sReportData	
+'	End If
+	
+	If (tempSpaceWarning <> "") Then
+		sDetailMessage = sDetailMessage & NL & tempSpaceWarning
+	End If
+	
+	'
+	'	clean up
+	'
+CLEAN_SERVICE:
+	lRet = RunCmd(cmdLine & "-stop", dwProcessId)
+	lRet = RunCmd(cmdLine & "-delete", dwProcessId)
+CLEAN_FILES:
+	lRet = RunCmd("cmd /c del /q /s " & QUO & sUNC & QUO, dwProcessId)	
+  	If (lRet <> 0)  Then
+		bWarning = TRUE
+		sDetailMessage = sDetailMessage & NL & _ 
+			"WARNING: Failed to clean up files"
+		GoTo OUT1
+	End If
+	lRet = RunCmd("cmd /c rmdir /Q /S " & sUNC & QUO, dwProcessId)
+	If (lRet <> 0)  Then
+		bWarning = TRUE
+		sDetailMessage = sDetailMessage & NL & _
+			"WARNING: Failed to remove directory " & sUNC
+		GoTo OUT1
+	End If
+	lRet = RunCmd("cmd /c rmdir /Q " & tUNC & QUO, dwProcessId)
+OUT1:
+	'
+	'
+	'
+	sEventMessage = "AppManager Agent Pre-installation check complete"
+	If (bError)  Then
+		sEventMessage = "AppManager Agent Pre-installation check failed"
+	End If 
+	If (bWarning) Then
+		sEventMessage = "AppManager Agent  Pre-installation check partially done"	
+	End If	
+	'
+	'  report error or warning.  report success only if user wants it.
+	'
+	If (bError) Then
+		MSActions 1, sEventMessage, AKPID, NT_MachineFolder, sDetailMessage
+	ElseIf (bWarning) Then
+'	ElseIf (bWarning) Or Len(sReportData) > 0 Then	' Used for reporting failures in the test
+		MSActions 15, sEventMessage, AKPID, NT_MachineFolder, sDetailMessage
+	Else
+		If (DO_EVENT = "y")  Then
+ 			MSActions Severity, sEventMessage, AKPID, NT_MachineFolder, sDetailMessage
+		End If		
+	End If
+	Exit Sub
+OUT:
+	'  !!! avoid using mcabort
+	MCAbort resname, errormsg
+	'
+End Sub
+
+'### End KPS Section

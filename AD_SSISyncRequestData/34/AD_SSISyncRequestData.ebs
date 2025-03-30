@@ -1,0 +1,320 @@
+'### 
+'### AD_SSISyncRequestData
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.415.1.1"
+Const KSVerID = "3.4"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=12/21/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Collects data on the Active Directory synchronization requests and failed replication requests.
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = ThirtyM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_ADServer = ""
+'### End Type Section
+
+'### Begin KPP Section
+'[V<CPReady, Collects data on Active Directory synchronization requests and the percentage of requests that fail.(Version 3.4)>V]
+Const DEBUG = "n"	    '[M<Write Debug Information to File? (y/n)>M] [T<String,1,,"yn">T]
+'[A<This script is for data collection only so actions have no effect.>A]
+Const AKPID = "AKP_NULL"	' [M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Const Sev_Normal = 40 	
+Const DO_EVENT = "n"	
+Const DO_DATA = "y"		
+Const DO_NUMBERS = "n" 	
+Const TH_OVER = 1		
+Const SEND_NORMAL = "n"	
+Const CONSEC_TIME = 1	
+Const Sev_Exceeded = 5	
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Dim NT As Object
+Dim OBJ As Object
+Dim Machinenamestr As String
+'These store the info about each Counter to be monitored
+'THe value here should equal the amount of times the function GetCounterValue
+'is called from the main() Routine
+Dim ConTimes As Integer	  
+
+Dim EventFired As Boolean
+Dim InstanceName As String
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+Dim resmsg As String
+Const OBJNAME = "NTDS"
+Const CNTName =	"DRA Sync Requests Made"
+Const CNT2Name = "DRA Sync Requests Successful"
+
+
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+Function AlterString(sString As String, sCharToReplace As String, sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+	
+Sub GetCounterValue()
+
+	Dim dval As Double
+	Dim strdVal As String
+
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+	If DO_DEBUG = "y" Then 
+		Print #2, now() & "       " & "AD Replication sync Failures"
+	End If
+
+	dval1 = Obj.CounterValue(OBJNAME, CNTName, "")
+
+	If dval1 = -1 Then
+		Err.Description = "This KS can only run on Windows 2000 Domain Controller. Failed on Counter: " & OBJNAME & "::" & CNTName 
+		Err.raise 4103	  'raise error to terminate this KS
+	End If
+
+	dval2 = Obj.CounterValue(OBJNAME, CNT2Name, "")
+
+	If dval2 = -1 Then
+		Err.Description = "This KS can only run on Windows 2000 Domain Controller. Failed on Counter: " & OBJNAME & "::" & CNT2Name 
+		Err.raise 4103	  'raise error to terminate this KS
+	End If
+
+	If (dval1 = 0) Then
+		dval = 100
+	Else
+		dval = 100.0 * (dval1 - dval2)/dval1
+	End If
+
+	If dval = -1 Then
+		If DO_DEBUG = "y" Then 
+			Print #2, now() & "       " &  "Error Retrieving Queue values"
+			Close #2
+		End If
+
+		longmsg = "Can't get value of Queue length" 
+		shortmsg = 	Machinenamestr & " SYNC-FAILURES ERROR NULL"
+		MCAbort resmsg, shortmsg
+	End If
+	strdVal = format$(dval,"0.00") & "%"
+	If DO_EVENT = "y" And dval > TH_OVER Then
+		If DO_DEBUG = "y" Then 
+			Print #2, now() & "       " &  "	Rep Fails are over Threshold"
+			Print #2, now() & "       " &  "		Failure % Value 		: " & strdVal
+			Print #2, now() & "       " &  "		Threshold Value 	: " & Cstr(TH_OVER)
+		End If
+		ConTimes = ConTimes + 1
+		If ConTimes= CONSEC_TIME Then
+			If DO_DEBUG = "y" Then 
+				Print #2, now() & "       " & "	Rep Fails exceeded threshold"
+				Print #2, now() & "       " & "		Required Consecutive times"
+				Print #2, now() & "       " & "		Times Over 		: " & ConTimes
+				Print #2, now() & "       " & "		Required Times 	: " & CONSEC_TIME
+			End If
+			longmsg = "The percentage of failed replication sync" & Chr$(10)
+			longmsg = longmsg & "requests Is " & dval & Chr$(10)
+			longmsg = longmsg & "which is over the threshold " & TH_OVER & "." & Chr$(10)
+			longmsg = longmsg & "The # of total requests made is " & dval1 & Chr$(10)
+			longmsg = longmsg & "The # of successful requests is " & dval2 & Chr$(10)
+			longmsg = longmsg & "The Queue has exceeded this threshold " & ConTimes & " Times" & chr$(10)
+			longmsg = longmsg & "Required Consecutive times before an " & chr$(10)
+			longmsg = longmsg & "event Is fired Is " & Cstr(CONSEC_TIME) & " Times"
+			If DO_NUMBERS = "y" Then
+				ShortMsg = 	Machinenamestr & " SYNC-FAILURES EXCEEDED " & strdVal
+			Else
+				ShortMsg = 	Machinenamestr & " SYNC-FAILURES EXCEEDED NULL"
+			End If
+			MSActions Sev_Exceeded, shortmsg, AKPID, resmsg, longmsg
+			ConTimes = 0 
+			EventFired = true
+		End If
+	End If
+
+
+	If DO_EVENT = "y" And dval < TH_OVER Then
+		If DO_DEBUG = "y" Then 
+			Print #2, now() & "       " &  " Sync Failures are Under Threshold"
+			Print #2, now() & "       " &  " 	Sync Failures Value 		: " & strdVal
+			Print #2, now() & "       " &  " 	Threshold Value 	: " & Cstr(TH_OVER)
+		End If
+		ConTimes = 0 
+		If EventFired = True Then
+			If DO_DEBUG = "y" Then 
+				Print #2, now() & "       " & "	Sync Failures are below threshold"
+				Print #2, now() & "       " & "		Required Consecutive times"
+				Print #2, now() & "       " & "		Times Under		: " & ConTimes
+				Print #2, now() & "       " & "		Required Times 	: " & CONSEC_TIME
+			End If
+			longmsg = "The number of AD Sync Failures is below the threshold" & chr$(10)
+			longmsg = longmsg & "Threshold for Sync Failures is " & Cstr(TH_OVER) & "#" & chr$(10)
+			If DO_NUMBERS = "y" Then
+				ShortMsg = 	shortmsg = 	Machinenamestr & " SYNC-FAILURES NORMAL " & strdVal
+			Else
+				ShortMsg = 	shortmsg = 	Machinenamestr & " SYNC-FAILURES NORMAL NULL"
+			End If
+			If SEND_NORMAL = "y" Then
+				MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+			Else
+				If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+					MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+				End If
+			End If
+			EventFired = false
+		End If
+	End If
+
+	' Check threshold, and do action
+
+	' Do graphing
+	If DO_DATA = "y" Then
+		If IterationCount() = 1 Then
+			DataHeader "% of failed replication sync requests ^^%", 0, 0
+		End If
+		DataLog 0, dval, "Sync Failures : " & strdVal
+	End If
+
+End Sub
+
+Sub Main()
+	On Error GoTo Main_Error
+	If Iterationcount() =1 Then	
+		Openfilefail = false
+	End If
+
+	Dim KSName As String 
+	Dim createret As Integer
+
+	resmsg = "NT_ADServer = " & NT_ADServer
+	If iterationcount() =1 Then
+    	Dim NameSize As Long
+	    Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+    	MachineName1 = Space$(16)
+	    NameSize = Len(MachineName1)
+    	X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+		Machinenamestr = lcase(trim(Machinenamestr))
+	End If
+
+	DO_DEBUG = DEBUG
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		KSName=	"AD_SSISyncRequestData" & str(getjobid())
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		If Openfilefail = true And DO_DEBUG = DEBUG Then 
+			eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+			longm = "Openned debug file " &  chr$(10) 
+			longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+			MSActions 40,eventmsg , AKPID, resmsg , longm
+			Openfilefail = false
+			Print #2 , Now() & "        " & "*********Restart Debugging*********"
+		End If
+	End If
+	
+	If DO_DEBUG = "y" Then 
+		Print #2, now() & "       " & "Checking AD Replication Sync Failures"
+	End If
+
+
+	GetCounterValue  
+
+
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Checking Sync Failures"
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resmsg, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resmsg,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+
+End Sub
+
+'### End KPS Section

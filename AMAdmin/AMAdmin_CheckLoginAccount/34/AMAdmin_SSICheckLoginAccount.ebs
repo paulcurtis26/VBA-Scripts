@@ -1,0 +1,396 @@
+'### Copyright (c) 1999 NetIQ Corp. All rights reserved.
+'### 
+'### AMAdmin_SSICheckLoginAccount.ebs
+'###
+
+'$Revision: 11 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.422.4.11"
+Const KSVerID = "1.0"
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors the number of Backup Exec jobs that have not completed.
+'### End KP-Status Section
+
+'### Begin KPC Section
+'Parameters = 0 1 0 1 0 1 1 1 0 99991231 0 235959  'Once
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""
+'### End Type Section
+
+'### Begin KPP Section				 
+
+'[V<Gets the account that is used to run NetIQMC and NetIQCCM services>V]
+Const QDBName = "QDB"	'[M<Name of QDB for repository>M]
+Const Severity = 5		'[M<Event severity level>M] [T<Integer,,,1, 40, SevLevel>T]
+Const DO_EVENT  = "n"	'[M<Send Event when complete? (y/n)>M] [T<String,1, ,"yn">T]
+Const DEBUG  = "n"   	'[M<Write Debug File? (y/n)>M] [T<String,1, ,"yn">T]
+'[A<When The script has completed checking service accounts the selected action is taken>A] 
+Const AKPID = "AKP_NULL"	  '[M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+Dim Machinenamestr As String
+
+Dim SQL As Object
+Dim Server As Object
+
+
+Declare Function CloseHandle Lib "kernel32.dll" Alias _
+	    "CloseHandle" (ByVal hObject As Long) As Long
+
+' Get log file name info from registery.
+'
+'  win32 registry functions
+'
+Global Const REG_SZ    = 1
+Global Const REG_DWORD = 4                      ' 32-bit number
+Global Const HKEY_CLASSES_ROOT = &H80000000 
+Global Const HKEY_CURRENT_USER = &H80000001 
+Global Const HKEY_LOCAL_MACHINE = &H80000002 
+Global Const HKEY_USERS = &H80000003 
+Global Const ERROR_NONE = 0 
+Global Const ERROR_BADDB = 1 
+Global Const ERROR_BADKEY = 2 
+Global Const ERROR_CANTOPEN = 3 
+Global Const ERROR_CANTREAD = 4 
+Global Const ERROR_CANTWRITE = 5 
+Global Const ERROR_OUTOFMEMORY = 6 
+Global Const ERROR_INVALID_PARAMETER = 7 
+Global Const ERROR_ACCESS_DENIED = 8 
+Global Const ERROR_INVALID_PARAMETERS = 87 
+Global Const ERROR_NO_MORE_ITEMS = 259 
+Global Const KEY_ALL_ACCESS = &H3F 
+Global Const KEY_READ       = &H19
+
+Declare Function RegCloseKey Lib "advapi32.dll" _ 
+		(ByVal hKey As Long) As Long 
+Declare Function RegOpenKeyEx Lib "advapi32.dll" Alias _ 
+		"RegOpenKeyExA" (ByVal hKey As Long, ByVal lpSubKey As String, _ 
+		ByVal ulOptions As Long, ByVal samDesired As Long, ByRef phkResult As Long) As Long 
+
+Declare Function RegQueryValueExString Lib "advapi32.dll" Alias _ 
+		"RegQueryValueExA" (ByVal hKey As Long, ByVal lpValueName As _ 
+		String, ByVal lpReserved As Long, lpType As Long, ByVal lpData _
+		As String, lpcbData As Long) As Long 
+
+
+Declare Function RegConnectRegistry Lib "advapi32.dll" Alias "RegConnectRegistryA" (ByVal lpMachineName As String, ByVal hKey As Long, phkResult As Long) As Long
+
+
+Sub GetAccountDetails(machname As String) 
+	'On Error GoTo GetAccountDetails_Error
+	Dim lRetVal&, hKey&, ValLen&, DataName$,DataName2$, DataLen&, rc&
+	Dim Reg_Log As String
+	Dim netiqmcdet As String 
+	Dim netiqccmdet As String 
+	Dim PKResult As Long
+	Dim RegReturn As Long
+	If DO_DEBUG  = "y" Then	
+		Print #2 , Now() & "        " & "Procedure :  GetAccountDetails"
+		Print #2 , Now() & "        " & "Connecting to registry on machine : " & machname & "."
+	End If	
+
+
+	RegReturn= RegConnectRegistry("\\"& trim$(machname),HKEY_LOCAL_MACHINE,PKResult)
+	If (RegReturn <> ERROR_NONE) Then
+		If DO_DEBUG  = "y" Then
+			Print #7,  trim(machname) & ",Error Opening Registry Key,Error Opening Registry Key"
+			Print #2 , Now() & "        " & "Error opening remote Registry key, Return code : " & RegReturn
+		End If
+		GoTo GetAccountDetails_Exit
+	End If
+
+	Reg_Log =  "SYSTEM\CurrentControlSet\Services\NetIQmc"
+
+	lRetVal = RegOpenKeyEx(PKResult, Reg_Log, 0, KEY_READ, hKey)
+	If (lRetVal <> ERROR_NONE) Then
+		If DO_DEBUG  = "y" Then
+			Print #7,  trim(machname) & ",Error Opening Registry Key,Error Opening Registry Key"
+			Print #2 , Now() & "        " & "Error opening Registry key, Return Code " & lRetVal
+		End If
+		GoTo GetAccountDetails_Exit
+	End If
+	DataLen = 256
+	DataName = String$(DataLen, 0)	  
+	lRetVal = RegQueryValueExString(hKey, "ObjectName", 0&, REG_SZ, DataName, DataLen)
+	If (lRetVal <> ERROR_NONE) Then
+		If DO_DEBUG  = "y" Then
+			Print #7,  trim(machname) & ",Error Opening Registry Key,Error Opening Registry Key"
+			Print #2 , Now() & "        " & "Error reading Object Login Details for mc"
+		End If
+		GoTo GetAccountDetails_Exit
+	End If
+	DataName = Left$(DataName, DataLen-1)
+	DataName = Trim$(DataName)
+
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Login Details from Registry for mc: " & DataName
+	End If
+	netiqmcdet = DataName
+	lRetVal = RegCloseKey (hKey)
+
+
+	Reg_Log =  "SYSTEM\CurrentControlSet\Services\NetIQccm"
+
+	lRetVal = RegOpenKeyEx(PKResult, Reg_Log, 0, KEY_READ, hKey)
+	If (lRetVal <> ERROR_NONE) Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Error opening Registry key, Return Code " & lRetVal
+		End If
+		GoTo GetAccountDetails_Exit
+	End If
+	DataLen = 256
+	DataName = String$(DataLen, 0)	  
+	lRetVal = RegQueryValueExString(hKey, "ObjectName", 0&, REG_SZ, DataName, DataLen)
+	If (lRetVal <> ERROR_NONE) Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Error reading Object Login Details for ccm"
+		End If
+		GoTo GetAccountDetails_Exit
+	End If
+	DataName = Left$(DataName, DataLen-1)
+	DataName = Trim$(DataName)
+
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Login Details from Registry for ccm: " & DataName
+	End If
+	netiqccmdet = DataName
+	lRetVal = RegCloseKey (hKey)
+
+
+
+	lRetVal = RegCloseKey (PKResult)
+
+	Print #7,  trim(machname) & "," & netiqmcdet & "," & netiqccmdet
+
+	GoTo GetAccountDetails_Exit
+	
+	
+
+GetAccountDetails_Error:
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error in log file name procedure"
+		Close #2
+	End If
+	MCAbort "", "Can't find the log file name in the registry."	
+	lRetVal = RegCloseKey (hKey)
+
+GetAccountDetails_Exit:
+
+End Sub
+
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * */
+'/* Sub: Main
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * */
+Sub Main()
+	'On Error GoTo main_error	
+	If Iterationcount() =1 Then	
+		Openfilefail = false
+	End If
+	Dim ErrorCode As Long
+  	Dim CurTasks As Double
+	Dim MaxConn As Integer
+	Dim AvailLock As Integer
+	Dim FileErrNum As Integer
+	Dim sqlcmd As String
+	Dim Taskcounter As Integer
+	Dim PrintRet As Integer
+ 	Dim longm As String
+	Dim DetailMsg As String
+   	Dim dbname$
+   	Dim legend$
+	Dim eventmsg As String
+	Dim I As Long
+	Dim numdb As Long
+	Dim passwd$
+ 	Dim AgtMsg As String
+	Dim strErrorMsg As String
+	Dim shortmsg As String
+	Dim resname As String
+	Dim ResourceName As String
+	Dim ReturnCode As Long
+	Dim LogFileName As String
+	Dim EventMessage As String
+	Dim DetailMessage As String
+	Dim DataPointValue As Long
+	Dim Num As Integer
+
+   	MCWaitNoAbortOnStop FALSE
+	
+	resname = "NT_MachineFolder = " & NT_MachineFolder
+	If Iterationcount() = 1 Then
+
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+	    MachineName1 = Space$(16)
+    	NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+
+	 	Machinenamestr = lcase(trim(Machinenamestr))
+	End If
+
+
+	DO_DEBUG = DEBUG
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		KSName=	"AMAdmin_SSICheckLoginAccount" & str(getjobid())
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		If Openfilefail = true And DO_DEBUG = DEBUG Then 
+			eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+			longm = "Openned debug file " &  chr$(10) 
+			longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+			MSActions 40,eventmsg , AKPID, resname, longm
+			Openfilefail = false
+			Print #2 , Now() & "        " & "*********Restart Debugging*********"
+		End If
+	End If
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Opened Log File"
+	End If
+	Set SQL = CreateObject("NetiQAgent.SQL")
+	Set Server = SQL.Lock	
+	Dim remotemachine As String	
+	passwd = GetSqlPassword("", "sa")
+
+	sqlcmd = "select char(44) + Name + char(44) from " & trim(QDBName) & "..object where RootMachineObjID =ObjID order by name" 
+
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "SQL Command : " & 	sqlcmd
+	End If
+	
+	CurTasks = SQL.RunSqlValue("sa", passwd, True, sqlcmd, 0, "y", 0, "", AgtMsg, ErrorCode, strErrorMsg, Legend)
+
+	If ErrorCode = -1 Then
+		If DO_EVENT = "y" Then
+			DetailMsg = strErrorMsg
+			shortmsg = Machinenamestr & " LOGIN-DETAILS FAILED NULL"
+			MSActions Severity, shortmsg, AKPID, resname, DetailMsg
+		End If	
+	End If
+
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Number of machines to check : " & CurTasks
+		Print #2 , Now() & "        " & "Error message : " & strErrorMsg
+		Print #2 , Now() & "        " & "Error Code : " & ErrorCode
+	End If
+
+
+	createret = createdebugdir
+	For agentmachine = 3 To (LineCount(AgtMsg) -1 )
+		If agentmachine = 3 Then
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "Created Log File LoginAccountDetails.txt"
+			End If
+			Open "c:\NetIQ_KSdebug\LoginAccountDetails" & str(getjobid()) & ".txt" For Output Access Write As #7
+			Print #7, "MachineName , NetIQMC Details , NetIQCCM Details"
+		Else
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "Opened Log File LoginAccountDetails.txt"
+			End If
+			Open "c:\NetIQ_KSdebug\LoginAccountDetails" & str(getjobid()) & ".txt" For Append Access Write As #7
+		End If
+ 		remotemachine = item$(Line$(AgtMsg,agentmachine,agentmachine+1),2)
+		Dim RemMachine As String
+	    RemMachine = Space$(16)
+		For y = 1 To Len(remotemachine)
+			If ASC(Mid(remotemachine,y,1)) <> 0 Then
+				RemMachine = RemMachine + Mid(remotemachine,y,1)
+			End If
+		Next y
+		GetAccountDetails(RemMachine)
+		Close #7
+	Next agentmachine
+
+	If DO_EVENT = "y" Then
+		DetailMsg = "Completed retrieving Service login details" & Chr(10)
+		DetailMsg = DetailMsg & "Login information has been placed in file"	& Chr(10)
+		DetailMsg = DetailMsg & "c:\NetIQ_KSdebug\LoginAccountDetails" & str(getjobid()) & ".txt"
+		shortmsg = Machinenamestr & " LOGIN-DETAILS COMPLETE NULL"
+		MSActions Severity, shortmsg, AKPID, resname, DetailMsg
+	End If	
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Checking for Login Details"
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resname,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+	
+End Sub
+'### End KPS Section

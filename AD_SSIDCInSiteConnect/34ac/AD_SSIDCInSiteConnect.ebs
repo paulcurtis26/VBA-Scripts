@@ -1,0 +1,375 @@
+'### Copyright (c) 1997-1999 NetIQ Corp. All rights reserved.
+'###
+'### AD_SSIDCInSiteConnect.ebs
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.415.1.2"
+Const KSVerID = "3.4"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=12/21/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW 				= 0
+'AdminOnly 				= 0
+'DisplayToolBar 		= 1
+'IAmDiscovery 			= 0
+'RunRightAway 			= 0
+'IAmAction 				= 0
+'IAmInstall 			= 0
+'ObjFullPath 			= 0
+'Description 			= Monitors the connectivity to domain controllers in the local site.
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC					= ThirtyM
+'### End KPC Section
+
+'### Begin Type Section
+Const ACTIVEDS_SITESCONTAINER 	= ""
+'### End Type Section
+
+'### Begin KPP Section
+'[V<CPReady.Checks the connectivity to the domain controllers in the local site. If the connection to any domain controller in the site fails, an event is raised. If collecting date, the percentage of DCs available is returned.(Version 3.4ac)>V]
+Const Severity = 5			'[M<Severity - Domain controller down>M] [T<Integer,,,1,39,SevLevel>T]
+Const SeverityFail = 15		'[M<Severity - Knowledge Script failure>M] [T<Integer,,,1,39,SevLevel>T] 
+Const DEBUG  = "n"   		'[M<Write Debug File? (y/n)>M] [T<String,1, ,"yn">T]
+'[A<If any domain controller in the site is inaccessible, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	'[M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Const DO_EVENT = "y"		
+Const DO_DATA = "n"			
+Const Sev_Normal = 40		
+Const SEND_NORMAL = "y"		
+Option Base 1
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+
+Dim Machinenamestr As String
+
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+
+Dim obj As Object
+
+Const UNIT = "^^%"
+
+Type DCStruct
+	DCName As String
+	DCStatus As Long
+	NewDC As Boolean
+	DeletedDC As Boolean
+	EventFired As Boolean
+End Type
+
+	
+Dim DCs() As DCStruct
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+Function AlterString(sString As String, sCharToReplace As String, sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+
+
+Function MyGetProgID (ByVal progid As String) As String
+	Dim version As String
+
+	MCVersion "netiqmc.exe", version
+	If version < "3.4" Then
+		MCAbort "", "AM 3.4 or higher is required."
+	Else
+		MyGetProgID= MCGetMOID (progid, AppManID)
+	End If
+End Function
+
+Sub Main()
+	'On Error GoTo main_error
+	If Iterationcount() =1 Then	
+		Openfilefail = false
+	End If
+
+	Dim sval$, version$, progid$
+	Dim resname As String
+	Dim shoremsg As String
+	Dim longmsg As String
+	Dim ErrMsg As String
+	Dim ErrCode As Long
+	Dim rc As Long
+	Dim II As Long
+	Dim DCNum As Long
+	Dim SiteName As String
+	Dim DCName As String
+	Dim DCStatus As Long
+	Dim List As String
+	Dim Result As String
+	Dim uNum As Long
+	Dim dNum As Long
+	Dim per As Double
+
+ 	resname = "ACTIVEDS_SITESCONTAINER = " & ACTIVEDS_SITESCONTAINER
+
+	If IterationCount() = 1 Then
+
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+	    MachineName1 = Space$(16)
+    	NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+
+		Machinenamestr = lcase(trim(Machinenamestr))
+
+		version = ""
+		MCVersion "qactivedsa.dll", version
+
+		sval = "NetiQAgent.ACTIVEDS"
+		progid  = MyGetProgID (sval)
+		Set obj = CreateObject(progid)
+	End If
+
+
+	DO_DEBUG = DEBUG
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		KSName=	"AD_SSIDCInSiteConnect" & str(getjobid())
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		If Openfilefail = true And DO_DEBUG = DEBUG Then 
+			eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+			longm = "Opened debug file " &  chr$(10) 
+			longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+			MSActions 40,eventmsg , AKPID, resname, longm
+			Openfilefail = false
+			Print #2 , Now() & "        " & "*********Restart Debugging*********"
+		End If
+	End If
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Getting counter value for " & CNTName
+	End If
+	rc = obj.DCInSiteConnectivity("a", "a", "a", 0, List, ErrMsg)
+
+	If (rc = 0) Then
+		DcNum = ItemCount(List, "|")
+		Dim NewDCs(DcNum) As DCStruct
+		SiteName = Item$(List, 1,, "|")
+
+		If IterationCount() = 1  And DO_DATA = "y" Then
+			DataHeader "DC Connectivity in site " & SiteName & UNIT, 0, 0
+		End If
+
+		dNum = 0
+		uNum = 0
+		Result = "The DC Connectivity in site " & SiteName & " :" & Chr$(10)
+		For II=2 To DcNum
+			DCName = Item$(Item$(List, II,, "|"), 1,,":")
+			DCStatus = CLng(Item$(Item$(List, II,, "|"), 2,,":"))
+
+			NewDCs(II-1).DCName = DCName
+			NewDCs(II-1).DCStatus = DCStatus
+			NewDCs(II-1).NewDC = true
+			NewDCs(II-1).DeletedDC = true
+			NewDCs(II-1).EventFired = false
+		Next II
+
+		Dim TmpDCs() As DCStruct				
+
+		'All NewDC are New so copy to Tmp
+		If iterationcount() = 1 Then
+			ReDim TmpDCs(DcNum-1)
+			For DCCount = 1 To (DcNum-1)
+			  TmpDCs(DCCount) = NewDCs(DCCount)
+			Next DCCount
+		Else
+			'Check all NewDC's if found in persistant array then not new
+			For DCCountx = 1 To ubound(NewDCs())
+				For DCCounty = 1 To ubound(DCs())
+					If NewDCs(DCCountx).DCName = DCs(DCCounty).DCName Then
+						NewDCs(DCCountx).NewDC = false
+						DCs(DCCounty).DCStatus = NewDCs(DCCountx).DCStatus
+					End If	
+				Next DCCounty
+			Next DCCountx
+
+			'Check all persisatnt array, if not in NewDC than deleted
+			For DCCounty = 1 To ubound(DCs())
+				DCs(DCCounty).DeletedDC = true
+				For DCCountx = 1 To ubound(NewDCs())
+					If DCs(DCCounty).DCName = NewDCs(DCCountx).DCName Then
+						DCs(DCCounty).DeletedDC = false
+					End If	
+				Next DCCountx
+			Next DCCounty
+
+			'Copy Persistant DC that are not marked as deleted
+			For DCCounty = 1 To Ubound(DCs())
+				If DCs(DCCounty).DeletedDC  = false Then
+					If arraydims(TmpDCs()) = 0 Then
+						ReDim TmpDCs(1)
+						TmpDCs(1) = DCs(DCCounty)
+					Else
+						ReDim TmpDCs(ubound(TmpDCs)+1)
+						TmpDCs(ubound(TmpDCs)) = DCs(DCCounty)
+					End If
+				End If
+			Next DCCounty
+
+			' Create all New DC in Tmp
+			For DCCountx = 1 To ubound(NewDCs())
+				If NewDCs(DCCountx).NewDC = true Then
+					If arraydims(TmpDCs()) = 0 Then
+						ReDim TmpDCs(1)
+						TmpDCs(1) = NewDCs(DCCountx)
+						Else
+						ReDim TmpDCs(ubound(TmpDCs)+1)
+						TmpDCs(ubound(TmpDCs)) = NewDCs(DCCountx)
+					End If
+				End If
+			Next DCCountx
+		End If
+
+		'DCs only contains new DC and non-deleted persistant DCs
+		ReDim DCs(ubound(TmpDCs()))
+		For DCCounty = 1 To ubound(TmpDCs())
+			DCs(DCCounty)=TmpDCs(DCCounty) 
+		Next DCCounty
+	
+				
+		For DCCounty = 1 To ubound(DCs())
+			If DCs(DCCounty).DCStatus = 2 Then
+				dNum = dNum + 1
+				Result = Result & DCName & " down" & Chr$(10)
+				If DO_EVENT = "y" Then
+					DCs(DCCounty).EventFired = true
+					eventmsg = Machinenamestr & " " &  "DC-" & alterstring(DCs(DCCounty).DCName," ","-") & " DOWN NULL"
+					longm = "Trying to connect to DC " &  chr$(10) 
+					longm = longm & DCs(DCCounty).DCName & " gave no response" & chr$(10) 
+					MSActions Severity,eventmsg , AKPID, resname, longm
+				End If
+			Else
+				uNum = uNum + 1
+				Result = Result & DCName & " up" & Chr$(10)
+				If DO_EVENT = "y" Then
+					eventmsg = Machinenamestr & " " &  "DC-" & alterstring(DCs(DCCounty).DCName," ","-") & " NORMAL NULL"
+					longm = "Trying to connect to DC " &  chr$(10) 
+					longm = longm & DCs(DCCounty).DCName & " gave a response" & chr$(10) 
+					If DCs(DCCounty).EventFired = true Then
+						If SEND_NORMAL = "y" Then
+							If DO_DEBUG  = "y" Then
+								Print #2 , Now() & "        " & "	Send Normal Event"
+							End If
+							MSActions Sev_Normal,eventmsg , AKPID, resname, longm
+						Else
+							If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+								If DO_DEBUG  = "y" Then
+									Print #2 , Now() & "        " & "	Send Normal Event, as action is Command Post"
+								End If
+								MSActions Sev_Normal,eventmsg , AKPID, resname, longm
+							End If
+						End If
+					End If
+					DCs(DCCounty).EventFired = false
+				End If
+			End If
+		Next DCCounty
+
+		If DO_DATA = "y" Then
+			per = 100 * uNum / (dNum + uNum)
+			DataLog 0, per, Result
+		End If
+	Else
+		eventmsg = Machinenamestr & " " &  "DC-CONNECTIVITY ERROR NULL"
+		longm = "Can't access the domain controller" & chr$(10)
+		longm = longm & "The error is "  & rc
+		MSActions SeverityFail, eventmsg, AKPID, resmsg, longmsg
+	End If
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Checking DC Connectivity"
+	Print #2 , Now() 
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resname,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+
+End Sub
+'### End KPS Section
+

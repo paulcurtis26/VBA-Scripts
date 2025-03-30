@@ -1,0 +1,539 @@
+'### Copyright (c) 1995 - 1999 NetIQ Corp. All rights reserved.
+'### 
+'### AD_SSIInboundReplStat.ks
+'###
+'### Monitors the Active Directory Inbound replication. 
+'### 
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.415.1.2"
+Const KSVerID = "3.4"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=12/21/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors the Active Directory Inbound replication rate.
+'### End KP-Status Section
+
+
+'### Begin KPC Section
+'KPC = ThirtyM
+'### End KPC Section
+
+
+'### Begin Type Section
+Const NT_ADServer = ""
+'### End Type Section
+
+
+'### Begin KPP Section
+'[V<CPReady.Monitors the Inbound replication rate in the Active Directory, and the percentage Applied and Filtered. If the number of Inbound replications per second exceeds the threshold, an event is raised.(Version 3.4ac)>V]
+Const DO_NUMBERS = "y" 		'[M<Show numbers? (y/n)>M][T<string,1,' ',yn">T]
+Const TH_TOTALRATE = 120	'[M<Threshold for the Total Inbound replication rate > >M] [T<Integer,,, ,, /sec>T]
+Const SEV_TOTALRATE = 8		'[M<Severity level - Inbound Total rate is high>M] [T<Integer,,,1, 39, SevLevel>T]
+Const Blank1 = "" 			'[M<>M][T<string,1,' ',">T]
+Const DO_APPLIEDRATE = "y" 	'[M<Do Events/Data for Applied Rate? (y/n)>M][T<string,1,' ',yn">T]
+Const TH_APPLIEDRATE = 120	'[M<Threshold for the Applied Inbound replication rate > >M] [T<Integer,,, ,, /sec>T]
+Const SEV_APPLIEDRATE = 8	'[M<Severity level - Inbound Total Applied rate is high>M] [T<Integer,,,1, 39, SevLevel>T]
+Const Blank2 = "" 			'[M<>M][T<string,1,' ',">T]
+Const DO_FILTEREDRATE = "y" '[M<Do Events/Data for Filtered Rate? (y/n)>M][T<string,1,' ',yn">T]
+Const TH_FILTEREDRATE = 120	'[M<Threshold for the Filtered Inbound replication rate > >M] [T<Integer,,, ,, /sec>T]
+Const SEV_FILTEREDRATE = 8	'[M<Severity level - Inbound Total Filtered rate is high>M] [T<Integer,,,1, 39, SevLevel>T]
+Const Blank3 = "" 			'[M<>M][T<string,1,' ',">T]
+Const DO_OBJRATE = "y" 		'[M<Do Events/Data for Object Rate? (y/n)>M][T<string,1,' ',yn">T]
+Const TH_OBJRATE = 120		'[M<Threshold for the Inbound Objects replication rate > >M] [T<Integer,,, ,, /sec>T]
+Const SEV_OBJRATE = 8		'[M<Severity level - Inbound Total Object rate is high>M] [T<Integer,,,1, 39, SevLevel>T]
+Const Blank4 = "" 			'[M<>M][T<string,1,' ',">T]
+Const DO_PROPRATE = "y" 	'[M<Do Events/Data for Properties Rate? (y/n)>M][T<string,1,' ',yn">T]
+Const TH_PROPRATE = 120		'[M<Threshold for the Inbound Properties replication rate > >M] [T<Integer,,, ,, /sec>T]
+Const SEV_PROPRATE = 8		'[M<Severity level - Inbound Total Properties rate is high>M] [T<Integer,,,1, 39, SevLevel>T]
+Const Blank5 = "" 			'[M<>M][T<string,1,' ',">T]
+Const DEBUG  = "n"   		'[M<Write Debug File? (y/n)>M] [T<String,1, ,"yn">T]
+'[A<When the threshold is exceeded, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Option Base 1
+Const DO_DATA = "n"	
+Const DO_EVENT = "y"		
+Const Sev_Normal = 40		
+Const SEND_NORMAL = "y"		
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Dim EventFiredCNT As Boolean
+
+Dim EventFiredApplied As Boolean
+Dim EventFiredFiltered As Boolean
+Dim EventFiredobjects As Boolean
+Dim EventFiredProperties As Boolean
+
+
+Dim Machinenamestr As String
+
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+
+
+Const UNITNUMBER = "^^#/sec"
+Const OBJNAME = "NTDS"
+
+Const CNTName = "DRA Inbound Values Total/sec"
+Const CNT1Name = "DRA Inbound Objects Applied/sec"
+Const CNT2Name = "DRA Inbound Objects Filtered/sec"
+Const CNT3Name = "DRA Inbound Properties Applied/sec"
+Const CNT4Name = "DRA Inbound Properties Filtered/sec"
+
+
+Const NL = chr$(10)		'newline
+Dim NT As Object		' Keep the reference count of this DLL
+Dim OBJ As Object		' Keep the reference count of this DLL
+Const resname = "NT_ADServer = " & NT_ADServer
+
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+Function MyGetProgID (progid As String) As String
+	Dim version As String
+
+	MCVersion "netiqmc.exe", version
+	If version < "3.0" Then
+		MyGetProgID = progid
+	Else
+		MyGetProgID = MCGetMOID (progid,AppManID)
+	End If
+End Function
+
+Function GetCounterVal (Objstr As String, Cntstr As String) As Double
+	Dim dval As Double
+
+	dval = OBJ.CounterValue(Objstr, Cntstr, "")
+
+	If dval = -1 Then
+		Err.Description = "This KS can only run on Windows 2000 Domain Controller. Failed on Counter: " & Objstr & "::" & Cntstr 
+		Err.raise 4103	  'raise error to terminate this KS
+	End If
+	GetCounterVal = dval
+End Function
+
+Sub Main()
+
+	On Error GoTo main_error
+	If Iterationcount() =1 Then	
+		Openfilefail = false
+	End If
+
+	Dim dval As Double 
+	Dim dval1 As Double 
+	Dim dval2 As Double 
+	Dim dval3 As Double 
+	Dim dval4 As Double 
+	Dim dobjrate As Double 
+	Dim dprtrate As Double
+	Dim longmsg As String
+	Dim shortmsg, tempstr As String
+	Dim progid$
+	
+	Dim dvalApplied As Double
+	Dim dvalFiltered As Double
+	Dim dvalObjects As Double
+	Dim dvalProperties As Double
+
+	If IterationCount() = 1 Then
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+	    MachineName1 = Space$(16)
+    	NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+
+		Machinenamestr = lcase(trim(Machinenamestr))
+
+
+		EventFiredCNT 	= false
+		EventFiredApplied = false
+		EventFiredFiltered = false
+		EventFiredobjects = false
+		EventFiredProperties = false
+
+		progid = MyGetProgId  ("NetiQAgent.NT")
+		Set NT = CreateObject (progid)
+		Set OBJ = NT.System
+
+		If DO_DATA = "y" Then
+			DataHeader "Total Inbound Repl " & UNITNUMBER, 0, 1
+			If DO_APPLIEDRATE = "y" Then
+				DataHeader "Total Inbound Applied Repl " & UNITNUMBER, 0, 2
+			End If
+			If DO_FILTEREDRATE = "y" Then
+				DataHeader "Total Inbound Filtered Repl " & UNITNUMBER, 0, 3
+			End If
+			If DO_OBJRATE = "y"	Then
+				DataHeader "Total Inbound Objects Repl " & UNITNUMBER, 0, 4
+			End If
+			If DO_PROPRATE = "y" Then
+				DataHeader "Total Inbound Properties Repl " & UNITNUMBER, 0, 5
+			End If
+		End If
+	End If
+	DO_DEBUG = DEBUG
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		KSName=	"AD_SSIInboundReplStat" & str(getjobid())
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		If Openfilefail = true And DO_DEBUG = DEBUG Then 
+			eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+			longm = "Openned debug file " &  chr$(10) 
+			longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+			MSActions 40,eventmsg , AKPID, resname, longm
+			Openfilefail = false
+			Print #2 , Now() & "        " & "*********Restart Debugging*********"
+		End If
+	End If
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Getting counter value for " & CNTName
+	End If
+
+	dval = GetCounterVal(OBJNAME, CNTName)		'total value
+	dval1 = GetCounterVal(OBJNAME, CNT1Name)	'Applied object
+	dval2 = GetCounterVal(OBJNAME, CNT2Name)	'filtered object
+	dval3 = GetCounterVal(OBJNAME, CNT3Name)	'Applied property
+	dval4 = GetCounterVal(OBJNAME, CNT4Name)	'Filtered property
+
+
+	dvalApplied = dval1 + dval3
+	dvalFiltered = dval2 + dval4
+	dvalObjects = dval1 + dval2
+	dvalProperties = dval3 + dval4
+	
+	If DO_EVENT = "y" Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "	Do Eventing"
+		End If
+		If dval > TH_TOTALRATE Then
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "	Inbound Total Repl over in Threshold"
+				Print #2 , Now() & "        " & "		Repl 			: " & format(dval,"0")
+				Print #2 , Now() & "        " & "		Threshold 			: " & TH_TOTALRATE
+			End If
+			longmsg = "DRA Inbound Total/sec is " & dval & ", over the threshold " & TH_TOTALRATE & "."
+			If DO_NUMBERS = "y" Then
+				ShortMsg = Machinenamestr & " REPL-INBND-TOTAL EXCEEDED " & format(dval,"0")
+			Else
+				ShortMsg = Machinenamestr & " REPL-INBND-TOTAL EXCEEDED NULL"
+			End If
+ 			MSActions SEV_TOTALRATE,ShortMsg, AKPID, resname, longmsg
+			EventFiredCNT = true
+		ElseIf dval < TH_TOTALRATE  Then
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "	Outbound Value Repl Below in Threshold"
+				Print #2 , Now() & "        " & "		Repl 			: " & format(dval,"0")
+				Print #2 , Now() & "        " & "		Threshold 			: " & TH_TOTALRATE
+			End If
+			longmsg = "DRA Inbound Total/sec is " & dval & ", below the threshold " & TH_TOTALRATE & "."
+			If DO_NUMBERS = "y" Then
+				ShortMsg = Machinenamestr & " REPL-INBND-TOTAL NORMAL " & format(dval,"0")
+			Else
+				ShortMsg = Machinenamestr & " REPL-INBND-TOTAL NORMAL NULL"
+			End If
+			If EventFiredCNT = true Then
+				If SEND_NORMAL = "y" Then
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & "	Send Normal Event"
+					End If
+		 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+				Else
+					If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & "	Send Normal Event, as action is Command Post"
+						End If
+			 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+					End If
+				End If
+			End If
+			EventFiredCNT = false
+		End If
+
+		If DO_APPLIEDRATE = "y" Then
+			If dvalApplied > TH_APPLIEDRATE Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "	Inbound Total Applied Repl over in Threshold"
+					Print #2 , Now() & "        " & "		Repl 			: " & format(dvalApplied,"0")
+					Print #2 , Now() & "        " & "		Threshold 			: " & TH_APPLIEDRATE
+				End If
+				longmsg = "DRA Inbound Total Applied/sec is " & dvalApplied & ", over the threshold " & TH_APPLIEDRATE & "."
+				If DO_NUMBERS = "y" Then
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-APPLIED EXCEEDED " & format(dvalApplied,"0")
+				Else
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-APPLIED EXCEEDED NULL"
+				End If
+ 				MSActions SEV_APPLIEDRATE,ShortMsg, AKPID, resname, longmsg
+				EventFiredApplied = true
+			ElseIf dvalApplied < TH_APPLIEDRATE  Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "	Inbound Total Applied Repl Below in Threshold"
+					Print #2 , Now() & "        " & "		Repl 			: " & format(dvalApplied,"0")
+					Print #2 , Now() & "        " & "		Threshold 			: " & TH_APPLIEDRATE
+				End If
+				longmsg = "DRA Inbound Total Applied/sec is " & dvalApplied & ", below the threshold " & TH_APPLIEDRATE & "."
+				If DO_NUMBERS = "y" Then
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-APPLIED NORMAL " & format(dvalApplied,"0")
+				Else
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-APPLIED NORMAL NULL"
+				End If
+				If EventFiredApplied = true Then
+					If SEND_NORMAL = "y" Then
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & "	Send Normal Event"
+						End If
+			 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+					Else
+						If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+							If DO_DEBUG  = "y" Then
+								Print #2 , Now() & "        " & "	Send Normal Event, as action is Command Post"
+							End If
+				 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+						End If
+					End If
+				End If
+				EventFiredApplied = false
+			End If
+		End If
+		If DO_FILTEREDRATE = "y" Then
+			If dvalFiltered > TH_FILTEREDRATE Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "	Inbound Total Filtered Repl over in Threshold"
+					Print #2 , Now() & "        " & "		Repl 			: " & format(dvalFiltered,"0")
+					Print #2 , Now() & "        " & "		Threshold 			: " & TH_FILTEREDRATE
+				End If
+				longmsg = "DRA Inbound Total Filtered/sec is " & dvalFiltered & ", over the threshold " & TH_FILTEREDRATE & "."
+				If DO_NUMBERS = "y" Then
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-FILTERED EXCEEDED " & format(dvalFiltered,"0")
+				Else
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-FILTERED EXCEEDED NULL"
+				End If
+	 			MSActions SEV_FILTEREDRATE,ShortMsg, AKPID, resname, longmsg
+				EventFiredFiltered = true
+			ElseIf dvalFiltered < TH_FILTEREDRATE  Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "	Inbound Total Filtered Repl Below in Threshold"
+					Print #2 , Now() & "        " & "		Repl 			: " & format(dvalFiltered,"0")
+					Print #2 , Now() & "        " & "		Threshold 			: " & TH_FILTEREDRATE
+				End If
+				longmsg = "DRA Inbound Total Filtered/sec is " & dvalFiltered & ", below the threshold " & TH_FILTEREDRATE & "."
+				If DO_NUMBERS = "y" Then
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-FILTERED NORMAL " & format(dvalFiltered,"0")
+				Else
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-FILTERED NORMAL NULL"
+				End If
+				If EventFiredFiltered = true Then
+					If SEND_NORMAL = "y" Then
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & "	Send Normal Event"
+						End If
+			 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+						Else
+						If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+							If DO_DEBUG  = "y" Then
+								Print #2 , Now() & "        " & "	Send Normal Event, as action is Command Post"
+							End If
+				 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+						End If
+					End If
+				End If
+				EventFiredFiltered = false
+			End If
+		End If
+
+		If DO_OBJRATE = "y" Then
+			If dvalObjects > TH_OBJRATE Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "	Inbound Total Objects Repl over in Threshold"
+					Print #2 , Now() & "        " & "		Repl 			: " & format(dvalObjects,"0")
+					Print #2 , Now() & "        " & "		Threshold 			: " & TH_OBJRATE
+				End If
+				longmsg = "DRA Inbound Total Objects/sec is " & dvalObjects & ", over the threshold " & TH_OBJRATE & "."
+				If DO_NUMBERS = "y" Then
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-OBJECTS EXCEEDED " & format(dvalObjects,"0")
+				Else
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-OBJECTS EXCEEDED NULL"
+				End If
+ 				MSActions SEV_OBJRATE,ShortMsg, AKPID, resname, longmsg
+				EventFiredobjects = true
+			ElseIf dvalObjects < TH_OBJRATE  Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "	Inbound Total Objects Repl Below in Threshold"
+					Print #2 , Now() & "        " & "		Repl 			: " & format(dvalObjects,"0")
+					Print #2 , Now() & "        " & "		Threshold 			: " & TH_OBJRATE
+				End If
+				longmsg = "DRA Inbound Total Objects/sec is " & dvalObjects & ", below the threshold " & TH_OBJRATE & "."
+				If DO_NUMBERS = "y" Then
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-OBJECTS NORMAL " & format(dvalObjects,"0")
+				Else
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-OBJECTS NORMAL NULL"
+				End If
+				If EventFiredobjects = true Then
+					If SEND_NORMAL = "y" Then
+						If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & "	Send Normal Event"
+						End If
+			 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+					Else
+						If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+							If DO_DEBUG  = "y" Then
+								Print #2 , Now() & "        " & "	Send Normal Event, as action is Command Post"
+							End If
+			 				MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+						End If
+					End If
+				End If
+				EventFiredobjects = false
+			End If
+		End If
+
+		If DO_PROPRATE = "y" Then
+			If dvalProperties > TH_PROPRATE Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "	Inbound Total Properties Repl over in Threshold"
+					Print #2 , Now() & "        " & "		Repl 			: " & format(dvalProperties,"0")
+					Print #2 , Now() & "        " & "		Threshold 			: " & TH_PROPRATE
+				End If
+				longmsg = "DRA Inbound Total Proprties/sec is " & dvalProperties & ", over the threshold " & TH_PROPRATE & "."
+				If DO_NUMBERS = "y" Then
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-PROPERTIES EXCEEDED " & format(dvalProperties,"0")
+				Else
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-PROPERTIES EXCEEDED NULL"
+				End If
+ 				MSActions SEV_PROPRATE,ShortMsg, AKPID, resname, longmsg
+				EventFiredProperties = true
+			ElseIf dvalProperties < TH_PROPRATE  Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "	Inbound Total Properties Repl Below in Threshold"
+					Print #2 , Now() & "        " & "		Repl 			: " & format(dvalProperties,"0")
+					Print #2 , Now() & "        " & "		Threshold 			: " & TH_PROPRATE
+				End If
+				longmsg = "DRA Inbound Total Properties/sec is " & dvalProperties & ", below the threshold " & TH_PROPRATE & "."
+				If DO_NUMBERS = "y" Then
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-PROPERTIES NORMAL " & format(dvalProperties,"0")
+				Else
+					ShortMsg = Machinenamestr & " REPL-INBND-TOTAL-PROPERTIES NORMAL NULL"
+				End If
+				If EventFiredProperties = true Then
+					If SEND_NORMAL = "y" Then
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & "	Send Normal Event"
+						End If
+			 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+					Else
+						If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+							If DO_DEBUG  = "y" Then
+								Print #2 , Now() & "        " & "	Send Normal Event, as action is Command Post"
+							End If
+				 			MSActions Sev_Normal,ShortMsg, AKPID, resname, longmsg
+						End If
+					End If
+				End If
+				EventFiredProperties = false
+			End If
+		End If
+	End If
+	If DO_DATA = "y" Then
+		longmsg = "Total Objects set for Replicated " & dval
+		DataLog 1, dval, longmsg
+		If DO_APPLIEDRATE = "y" Then
+			longmsg = "Total Repl Applied rate is " & dvalApplied
+			DataLog 2, dvalApplied, longmsg
+		End If
+		If DO_FILTEREDRATE = "y" Then
+			longmsg = "Total Repl Filtered rate is " & dvalFiltered
+			DataLog 3, dvalFiltered, longmsg
+		End If
+		If DO_OBJRATE = "y"	Then
+			longmsg = "Total Repl Objects rate is " & dvalObjects
+			DataLog 4, dvalObjects, longmsg
+		End If
+		If DO_PROPRATE = "y" Then
+			longmsg = "Total Repl Properties rate is " & dvalProperties
+			DataLog 5, dvalProperties, longmsg
+		End If
+	End If
+
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Checking Inbound Replication"
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resname,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+
+
+End Sub
+
+'### End KPS Section
+

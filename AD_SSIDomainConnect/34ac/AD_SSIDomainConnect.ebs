@@ -1,0 +1,233 @@
+'### Copyright (c) 1997-1999 NetIQ Corp. All rights reserved.
+'###
+'### AD_SSIDomainConnect.ebs
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.415.1.2"
+Const KSVerID = "3.4"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=12/21/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW 				= 0
+'AdminOnly 				= 0
+'DisplayToolBar 		= 1
+'IAmDiscovery 			= 0
+'RunRightAway 			= 0
+'IAmAction 				= 0
+'IAmInstall 			= 0
+'ObjFullPath 			= 0
+'Description 			= Monitors connectivity to all trusted domains.
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC					= ThirtyM
+'### End KPC Section
+
+'### Begin Type Section
+Const ACTIVEDS_TRUSTEDDOMAIN 	= ""
+'### End Type Section
+
+'### Begin KPP Section
+'[V<CPReady.Checks the connectivity to all trusted domains. If the connection to any trusted domain fails, an event is raised. Currently does not support NT 4.0 style trusts.(Version 3.4ac) >V]
+Const Severity = 5			'[M<Severity - Domain connectivity down>M] [T<Integer,,,1,39,SevLevel>T]
+Const DEBUG  = "n"   		'[M<Write Debug File? (y/n)>M] [T<String,1, ,"yn">T]
+
+'[A<If a trusted domain is not accessible, the selected action is taken.>A]
+Const AKPID 			= "AKP_NULL"	'[M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Const DO_EVENT = "y"		
+Const DO_DATA = "n"			
+Const Sev_Normal = 40
+Const SEND_NORMAL = "y"		
+Option Base 1
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+
+Dim Machinenamestr As String
+
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+Dim eventfired() As Boolean
+
+
+Dim ADMO As Object
+
+Function MyGetProgID (ByVal progid As String) As String
+	Dim version As String
+
+	MCVersion "netiqmc.exe", version
+	If version < "3.4" Then
+		MCAbort "", "AM 3.4 or higher is required."
+	Else
+		MyGetProgID= MCGetMOID (progid, AppManID)
+	End If
+End Function
+
+Sub Main()
+	'On Error GoTo main_error
+
+	If Iterationcount() =1 Then	
+		Openfilefail = false
+	End If
+
+	Dim sval$, version$, progid$
+	Dim resname 	As String
+	Dim shoremsg 	As String
+	Dim longmsg 	As String
+	Dim II 			As Long
+	Dim DomainName 	As String
+	Dim success		As Long
+	Dim strErrorMsg	As String
+	Dim errorcode 	As Long
+	Dim val 		As Long
+ 	resname = "ACTIVEDS_SITESCONTAINER = " & ACTIVEDS_SITESCONTAINER
+
+	If IterationCount() = 1 Then
+
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+	    MachineName1 = Space$(16)
+    	NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+
+		Machinenamestr = lcase(trim(Machinenamestr))
+
+		version = ""
+		progid = MyGetProgId  ("NetiQAgent.ACTIVEDS")
+		Set ADMO = CreateObject (progid)
+		Dim eventfired(ItemCount(ACTIVEDS_TRUSTEDDOMAIN, ","))
+		For x = 1 To ubound(EventFired())
+			EventFired(x) = false
+		Next x
+	End If
+
+
+	DO_DEBUG = DEBUG
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		KSName=	"AD_SSIDomainConnect" & str(getjobid())
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		If Openfilefail = true And DO_DEBUG = DEBUG Then 
+			eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+			longm = "Opened debug file " &  chr$(10) 
+			longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+			MSActions 40,eventmsg , AKPID, resname, longm
+			Openfilefail = false
+			Print #2 , Now() & "        " & "*********Restart Debugging*********"
+		End If
+	End If
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Getting counter value for " & CNTName
+	End If
+
+	longmsg = ""
+	
+	For II = 1 To ItemCount(ACTIVEDS_TRUSTEDDOMAIN, ",")
+		DomainName 	= Item$(ACTIVEDS_TRUSTEDDOMAIN, II,, ",")
+	 	resname = "ACTIVEDS_TRUSTEDDOMAIN = " & DomainName
+		If (DO_DATA = "y" And IterationCount() = 1) Then
+			DataHeader "Connectivity to domain " & DomainName, 0, II	
+		End If
+
+		errorcode 	= ADMO.ConnectADServer(DomainName, success, strErrorMsg)
+		
+		If errorcode <> 0 Or success = 0 Then
+			val = 0
+			longmsg = "The connectivity to domain " & DomainName & " is down."
+			If (DO_EVENT = "y") Then
+				EventFired(II) = true
+				eventmsg = Machinenamestr & " " &  "DOMAIN-CONNECTIVITY DOWN NULL"
+				longm = "Trying to connect to DOMAIN " &  chr$(10) 
+				longm = longm & DomainName & " gave no response" & chr$(10) 
+				MSActions Severity,eventmsg , AKPID, resname, longm
+			End If
+		Else
+			val = 100
+			longmsg = "The connectivity to domain " & DomainName & " is up."
+			eventmsg = Machinenamestr & " " &  "DOMAIN-CONNECTIVITY NORMAL NULL"					
+			longm = "Trying to connect to Domain " &  chr$(10) 
+			longm = longm & DomainName & " gave a response" & chr$(10) 
+			If EventFired(II) = true Then
+				If SEND_NORMAL = "y" Then
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & "	Send Normal Event"
+					End If
+					MSActions Sev_Normal,eventmsg , AKPID, resname, longm
+				Else
+					If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & "	Send Normal Event, as action is Command Post"
+						End If
+						MSActions Sev_Normal,eventmsg , AKPID, resname, longm
+					End If
+				End If
+			    EventFired(II) = false
+			End If
+		End If
+
+		If (DO_DATA = "y") Then
+			DataLog II, val, longmsg
+		End If
+	Next II
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Checking Domain Connectivity"
+	Print #2 , Now() 
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resname,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+End Sub
+'### End KPS Section
+

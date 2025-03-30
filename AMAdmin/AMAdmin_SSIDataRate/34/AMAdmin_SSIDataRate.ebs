@@ -1,0 +1,189 @@
+'### 
+'### AMAdmin_SSIDataRate
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.415.1.2"
+Const KSVerID = "3.4"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=12/21/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors Rate at which data is being sent to the Management Server 
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = ThirtyM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""
+'### End Type Section
+
+'### Begin KPP Section
+
+'[V<CPReady.Monitors Rate at which data is being sent to the Management Server  (Version 3.4).>V]
+Const DO_EVENT = "y"	'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"		'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_NUMBERS = "y" 	'[M<Show numbers? (y/n)>M][T<string,1,' ',yn">T]
+Const THRESHOLD1 = 10	'[M<Data Rate Threshold> >M] [T<Integer,,, 0, 9999, Points/Second >T]
+Const SEND_NORMAL = "y"	'[M<Send Mesage When Dat Rate is Normal (AutoClear Message) ? (y/n)>M] [T<String,1,,"yn">T]
+Const CONSEC_TIME = 1	'[M<Consecutive times>M] [T<long,,,1, 999999, #>T]
+Const Sev_Exceeded = 5	'[M<Event Severity - Exceeded>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Sev_Normal = 40 	'[M<Event Severity - Normal>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<If the Rate that the data is being sent to Management Server exceeds threshold, the selected action is taken. >A]
+Const AKPID = "AKP_NULL"	' [M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Dim NT As Object
+Dim OBJ As Object
+Dim Machinenamestr As String
+'These store the info about each Counter to be monitored
+'THe value here should equal the amount of times the function GetCounterValue
+'is called from the main() Routine
+Dim ConTimesOver(1) As Integer	  
+Dim ConTimesUnder(1) As Integer
+Dim EventFired(1) As Boolean
+
+Function AlterString(sString As String, sCharToReplace As String, sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+	
+Sub GetCounterValue(ObjectName As String, CounterName As String, InstanceName As String, nDataID As Integer, TH_OVER As Integer)
+	Dim dval As Double
+	Dim dval2 As Double
+	Dim dval3 As Double
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+
+	dval = OBJ.CounterValue(ObjectName, CounterName, InstanceName)
+	If dval = -1 Then
+		resmsg = "NT_MachineFolder = " & NT_MachineFolder
+		longmsg = "Can't get value of " & ObjectName & " " & CounterName & " " & InstanceName
+		shortmsg = 	"Can't get value of " & CounterName
+		MCAbort resmsg, shortmsg
+	End If
+	If DO_EVENT = "y" And dval > TH_OVER Then
+		ConTimesOver(nDataID) = ConTimesOver(nDataID) + 1
+		ConTimesUnder(nDataID)=0
+		If ConTimesOver(nDataID) = CONSEC_TIME Then
+			resmsg = "NT_MachineFolder = " & NT_MachineFolder
+
+			longMsg = "NetIQMS Date Rate is over Threshold " & Chr(10)
+			longMsg = longMsg & "Date Rate = " & format(dval,"0") & " Points/Second" & Chr(10)
+			longMsg = longMsg & "Threshold = " & TH_OVER & " Points/Second" & Chr(10)
+			longMsg = longMsg & "This value could indicate that the" & Chr(10)
+			longMsg = longMsg & "Rate that the data is being sent may " & Chr(10)
+			longMsg = longMsg & "Over Work the Management Server " & Chr(10)
+
+
+			If DO_NUMBERS = "y" Then
+				ShortMsg = MachineNamestr & " " & "NetIQms-DATA-RATE" & " EXCEEDED " &  format(dval,"0")
+			Else
+				ShortMsg = MachineNamestr & " " & "NetIQms-DATA-RATE" & " EXCEEDED " & "NULL"
+			End If
+			MSActions Sev_Exceeded, shortmsg, AKPID, resmsg, longmsg
+			ConTimesOver(nDataID) = 0 
+			EventFired(nDataID) = true
+		End If
+	End If
+
+
+	If DO_EVENT = "y" And dval < TH_OVER Then
+		ConTimesUnder(nDataID) = ConTimesUnder(nDataID) + 1
+		'Stops Var overflowing if continually alright
+		If ConTimesUnder(nDataID) = 100 Then
+			ConTimesUnder(nDataID) = 99
+		End If
+		ConTimesOver(nDataID) = 0 
+		If ConTimesUnder(nDataID) = CONSEC_TIME And EventFired(nDataID) = True Then
+			resmsg = "NT_MachineFolder = " & NT_MachineFolder
+
+			longMsg = "NetIQMS Date Rate is Below Threshold " & Chr(10)
+			longMsg = longMsg & "Data Rate = " & format(dval,"0") & " Points/Second" & Chr(10)
+			longMsg = longMsg & "Threshold = " & TH_OVER & " Points/Second" & Chr(10)
+
+			If DO_NUMBERS = "y" Then
+				ShortMsg = MachineNamestr & " " & "NetIQms-DATA-RATE" & " NORMAL " &  format(dval,"0")
+			Else
+				ShortMsg = MachineNamestr & " " & "NetIQms-DATA-RATE" & " NORMAL " & "NULL"
+			End If
+
+			If SEND_NORMAL = "y" Then
+				MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+			Else
+				If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+					MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+				End If
+			End If
+			ConTimesUnder(nDataID) = 0 
+			EventFired(nDataID) = false
+		End If
+	End If
+
+	' Check threshold, and do action
+
+	' Do graphing
+	If DO_DATA = "y" Then
+		If IterationCount() = 1 Then
+			DataHeader OBJ.CounterLegend(ObjectName, CounterName, InstanceName) , 0, nDataID
+		End If
+		Datastr = "NetIQMS Data Rate = " & format(dval,"0") & "Points/Second"  & Chr(10)
+		Datastr = Datastr & "Threshold = " & TH_OVER & "Points/Second" & Chr(10)
+
+		DataLog nDataID, dval, Datastr
+	End If
+
+End Sub
+
+Sub Main()
+	If iterationcount() = 1 Then
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+	    MachineName1 = Space$(16)
+    	NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+		Machinenamestr = lcase(trim(Machinenamestr))
+	
+	End If
+
+	
+	'Create one row for each counter
+	GetCounterValue "NetIQms", "Data Rate", "0", 0, THRESHOLD1
+End Sub
+
+'### End KPS Section

@@ -1,0 +1,382 @@
+'### Copyright (c) 1995-1999 NetIQ Corp. All rights reserved.
+'### 
+'### AD_SSIIntraReplTraffic.ebs
+'###
+'
+'$Revision: 8 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.415.1.1"
+Const KSVerID = "3.4"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=05/08/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors the Active Directory inbound and outbound replication traffic within a site.
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = TenM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_ADServer = ""
+'### End Type Section
+
+'### Begin KPP Section
+'[V<CPReady.Monitors replication traffic within an AD site (intra-site traffic). You specify the max number of inbound and outbound bytes per second and the number of consec times the threshold can be exceeded before raising an event.(Version 3.4ac)>V]
+Const DO_NUMBERS = "y" 	'[M<Show numbers? (y/n)>M][T<string,1,' ',yn">T]
+Const TH_OVER =  60000	'[M<Inbound/Outbound bytes per second > >M] [T<Integer,,, ,, byte/sec >T]
+Const CONSEC_TIME = 1	'[M<Consecutive times>M] [T<long,,,1, 999999, #>T]
+Const Sev_Exceeded = 5	'[M<Event Severity - Exceeded>M] [T<Integer,,,1, 39, SevLevel>T]
+Const Sev_NoCount = 39 	'[M<Event Severity - No Counter>M] [T<Integer,,,1, 39, SevLevel>T]
+Const DEBUG = "n"	'[M<Write Debug Information to File? (y/n)>M] [T<String,1,,"yn">T]
+
+'[A<When the replication traffic is over the threshold, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Const SEND_NORMAL = "y"	
+Const DO_EVENT = "y"	
+Const DO_DATA = "n"		
+Const Sev_Normal = 40 	
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+Dim Machinenamestr As String
+
+Dim eventfired(2) As Boolean
+
+Const INDRACounter = "NTDS\DRA Inbound Bytes Not Compressed (Within Site)/sec\"	
+Const OUTDRACounter = "NTDS\DRA Outbound Bytes Not Compressed (Within Site)/sec\"	
+
+Dim NT As Object
+Dim OBJ As Object
+
+Dim g_szObject As String
+Dim g_szCounter As String
+Dim g_szInstance As String
+Dim PerfString As String
+
+Const UNITNUMBER = "^^#"
+
+Const resname = "NT_ADServer = " & NT_ADServer
+Private ConsecTimes(2) As Integer
+
+Function MyGetProgID (progid As String) As String
+	Dim version As String
+	MCVersion "netiqmc.exe", version
+	If version < "3.0" Then
+		MyGetProgID = progid
+	Else
+		MyGetProgID = MCGetMOID (progid,AppManID)
+	End If
+End Function
+
+Sub	ParseString(ByVal InstName, ByRef insname$, ByRef parinsname$)
+   Dim nPos As Integer
+
+       nPos = InStr(InstName,"==>")
+       If (nPos > 0) Then
+           parinsname = Mid$(InstName,1, nPos - 2)
+           insname = Right$(InstName,Len(InstName) - (nPos + 3))
+	   Else
+           insname = InstName
+           parinsname = ""
+       End If
+End Sub
+
+Sub ExtractIndex(ByRef InstName$, ByRef insIndex)
+	Dim nLeftPos As Integer 
+	Dim nRightPos As Integer
+	nLeftPos = InStr(InstName, "(")
+	nRightPos = InStr(InstName, ")")
+	If (nLeftPos <= 0 Or nRightPos <= 0) Then
+		insIndex = 0
+		Exit Sub
+	End If
+	insIndex = Mid(InstName, nLeftPos + 1, nRightPos - nLeftPos - 1)
+	InstName = Left(InstName, nLeftPos - 1)
+	InstName = Trim(InstName)
+End Sub
+
+Sub DoInstance(parinsname As String, parindex As Integer,_ 
+               insname As String, insindex As Integer, I As Integer)
+	Dim dval As Double
+	Dim detailmsg$
+    Dim insnamecomp$  
+	Dim Traftype As String
+	Dim ShortMsg As String
+	Dim longm As String
+
+	If I = 0 Then
+		Traftype = " Inbound "
+	Else
+		Traftype = " Outbound "
+
+	End If
+
+
+	'if I is 0 then this is for inbound traffic
+
+   'Composite instance name (i.e. with its index)
+	If (g_szInstance = "") Then
+		insnamecomp = ""
+	Else
+		insnamecomp = "\" & g_szInstance
+	End If
+	dval = OBJ.CounterValueEx(g_szObject, g_szCounter, insnamecomp, parinsname, parindex, insindex)
+
+	If dval = -1 Then
+		If DO_DEBUG = "y" Then
+			Print #2, now() & "       " &  "Error retrieving value"
+		End If
+		detailmsg = "Can't find counter for Intra Site" & Traftype & "Replication Traffic"
+		' report an error, but continue to the next instance and next interval 
+		MSActions Sev_NoCount, MachineNamestr & " REPLICATION-TRAFFIC ERROR NULL", AKPID, resname, detailmsg
+	Else
+		If DO_DEBUG = "y" Then
+			Print #2, now() & "       " &  "Got traffic Value"
+		End If
+
+		If DO_EVENT = "y" And Dval > TH_OVER Then
+			If DO_DEBUG = "y" Then
+				Print #2, now() & "       " &  " Counter Value for Intra Site" & Traftype & "Replication Traffic Over Threshold"
+			End If
+			ConsecTimes(I) = ConsecTimes(I) + 1
+			If ConsecTimes(I) = CONSEC_TIME Then
+				If DO_DEBUG = "y" Then
+					Print #2, now() & "       " &  " Counter Value for Intra Site" & Traftype & "Replication Traffic Exceeded Threshold " & ConsecTimes(I) & " Time(s)"
+				End If
+				longm = "Intra Site" & Traftype & "Replication Traffic is " & Format$(Dval, "0.00") & "; >TH = " & Cstr(TH_OVER)
+				If DO_NUMBERS = "y" Then
+					ShortMsg = MachineNamestr & " INTRASITE-" & UCASE$(Traftype) & " EXCEEDED " & Format$(Dval, "0.00")
+				Else
+					ShortMsg = MachineNamestr & " INTRASITE-" & UCASE$(Traftype) & " EXCEEDED NULL"
+				End If				
+				MSActions Sev_Exceeded, ShortMsg, AKPID, resname, longm 
+				EventFired(I) = True
+			End If
+		ElseIf DO_EVENT = "y" And Dval < TH_OVER Then
+			ConsecTimes(I) = 0 
+			If DO_DEBUG = "y" Then
+				Print #2, now() & "       " &  "Counter Value For Intra Site" & Traftype & "Replication Traffic Under Threshold " 
+			End If
+			longm = "Intra Site" & Traftype & "Replication Traffic is " & Format$(Dval, "0.00") & "; <TH = " & Cstr(TH_OVER)
+			If EventFired(I) = true Then
+
+				If DO_NUMBERS = "y" Then
+					ShortMsg = MachineNamestr & " INTRASITE-" & UCASE$(Traftype) & " NORMAL " & Format$(Dval, "0.00")	
+				Else
+					ShortMsg = MachineNamestr & " INTRASITE-" & UCASE$(Traftype) & " NORMAL NULL"
+				End If				
+
+				If SEND_NORMAL = "y" Then
+					If DO_DEBUG = "y" Then
+						Print #2, now() & "       " &  " Send Normal for Intra Site" & TrafType & "Traffic"
+					End If
+					MSActions Sev_Normal, ShortMsg, AKPID, resname, longm 
+				Else
+					If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+						If DO_DEBUG = "y" Then
+							Print #2, now() & "       " &  " Send Normal anyway as Action is command post"
+						End If
+						MSActions Sev_Normal, ShortMsg, AKPID,resname, longm 
+					End If
+				End If
+				eventfired(I) = false
+			End If
+		End If
+
+		If DO_DATA = "y" Then
+		   'Need to insert data collection code
+			detailmsg = "value for intra site" & TrafType & " Replication Traffic Is " & Format$(dval, "0.00")
+			DataLog I, dval, detailmsg
+		End If
+	End If 'dval <>  -1
+ 
+End Sub
+
+Sub Main()
+	On Error GoTo main_error
+	If Iterationcount() =1 Then	
+		Openfilefail = false
+	End If
+
+    Dim parinsname As String
+    Dim insname As String
+    Dim parinsindex As String
+    Dim instindex As String
+    Dim detailmsg As String
+    Dim szInstance As String
+    Dim progid As String
+    Dim iCount As Integer
+	Dim eventmsg As String
+	Dim longm As String
+    Dim nLeftPos As Integer, nRightPos As Integer
+
+	If iterationcount() =1 Then
+		Eventfired(0) = false
+		Eventfired(1) = false
+    	Dim NameSize As Long
+	    Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+    	MachineName1 = Space$(16)
+	    NameSize = Len(MachineName1)
+    	X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+		Machinenamestr = lcase(trim(Machinenamestr))
+	End If
+
+	DO_DEBUG = DEBUG
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		KSName=	"AD_SSIIntraReplTraffic" & str(getjobid())
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		If Openfilefail = true And DO_DEBUG = DEBUG Then 
+			eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+			longm = "Opened debug file " &  chr$(10) 
+			longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+			MSActions 40,eventmsg , AKPID, resname, longm
+			Openfilefail = false
+			Print #2 , Now() & "        " & "*********Restart Debugging*********"
+		End If
+	End If
+
+	If DO_DEBUG = "y" Then
+		Print #2, now() & "       " &  "Checking Intra Site Replication Traffic"
+	End If
+    
+
+
+    Dim fError As Boolean
+    Dim I As Integer
+
+    fError = False
+    detailmsg = ""
+
+    If IterationCount() = 1 Then
+       progid = MyGetProgID("NetiQAgent.NT")
+       Set NT = CreateObject(progid)
+       Set OBJ = NT.System
+
+        If DO_DATA = "y" Then
+			DataHeader "DRA Inbound Bytes Not Compressed (Within Site)/sec", 0, 0
+			DataHeader "DRA Outbound Bytes Not Compressed (Within Site)/sec", 0, 1
+        End If
+
+    End If
+
+    For iCount = 0 To 1
+        If iCount = 0 Then
+			If DO_DEBUG = "y" Then
+				Print #2, now() & "       " &  "Checking In Bound Traffic"
+			End If
+            PerfString = INDRACounter
+        Else
+			If DO_DEBUG = "y" Then
+				Print #2, now() & "       " &  "Checking Out Bound Traffic"
+			End If
+
+            PerfString = OUTDRACounter
+        End If
+    
+	    nLeftPos = InStr(PerfString, "\")
+	    nRightPos = InStr(nLeftPos + 1, PerfString, "\")
+	    If (nLeftPos = 0 Or nRightPos = 0) Then
+			If DO_DEBUG = "y" Then
+				Print #2, now() & "       " &  "Error with Perf String"
+				Print #2, now() & "       " &  "String : " & PerfString
+			End If
+
+			' bad argument
+	        MCAbort resname, "The " & PerfString & " counter not found."
+	    End If
+	    
+	    g_szObject = Left(PerfString, nLeftPos - 1)
+	    g_szCounter = Mid(PerfString, nLeftPos + 1, nRightPos - nLeftPos - 1)
+	    g_szInstance = ""
+	    DoInstance "", 0, "", 0, iCount
+    
+    Next iCount
+        
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Checking Intra Site Replication Traffic"
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resname,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+
+End Sub
+
+'### End KPS Section
