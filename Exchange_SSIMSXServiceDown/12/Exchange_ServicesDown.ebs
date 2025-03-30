@@ -1,0 +1,295 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exchange_ServicesDown.ks
+'### detects if Exchange services are down. If so, report an event and start the services
+'###
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors Exchange Services. Optionally start them if they are down.
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+'Const NT_MachineFolder = ""
+Const EXHT_Server = ""		'[T<String,,';',>T]
+Const EXHT_ServiceF = ""	'[T<String,,';',>T]
+'### End Type Section
+
+'### Begin KPP Section
+
+'### Author 		: NetIQ
+'### Revision       : 1.0
+'###
+'### Changed by		: Paul Curtis (171) 257 7373 (Property of Shell Services International)
+'### Date			: 23/11/98
+'### Revision       : 1.1
+'### Enhancements 	: -Added Debug info.
+'### 			 	: -Added N Occurence
+'###
+'### Changed by		: Paul Curtis (171) 257 7373 (Property of Shell Services International)
+'### Date			: 26/11/98
+'### Revision       : 1.1a
+'### Enhancements 	: -Added Command Post 2 Output
+'### 			 	: -Added "Create Directory Checking"
+'###
+'### Changed by		: Paul Curtis (171) 257 7373 (Property of Shell Services International)
+'### Date			: 2/12/98
+'### Revision       : 1.2
+'### Enhancements 	: -Added Time Value to Debug info.
+'### 			 	: -Added Clear Count to reset Thresholdcount after 5 x "N" Successful Conections
+
+
+
+
+'[V<Monitors the Services found during discovery. If ANY service is detected not running, an event is generated. When the Auto Start is turned on, the service is re-started. Various severity can be set.(Version 1.2)>V]
+Const AutoStart = "y"   ' [M<Auto Start Service? (y/n)>M] [T<String,1, ,"yn">T]
+Const Sev_FailStart = 5	'[M<Severity - Failed to Restart>M] [T<Integer,,,1, 40, SevLevel>T] 
+Const Sev_RestartOK = 25 '[M<Severity - Successful to Restart>M] [T<Integer,,,1, 40, SevLevel>T] 
+Const Sev_NotRestart = 18 '[M<Severity - Don't Restart>M] [T<Integer,,,1, 40, SevLevel>T] 
+Const CONSEC_TIMES = 1 '[M<Consec Times>M] [T<Integer,,,1, 9999, Times>T] 
+Const CheckCCMC = "n"   ' [M<Check MSExchangeCCMC? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckCoCo = "n"   ' [M<Check MSExchangeCoCo? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckDS   = "y"   ' [M<Check MSExchangeDS? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckDX   = "y"   ' [M<Check MSExchangeDX? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckES   = "n"   ' [M<Check MSExchangeES? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckFB   = "n"   ' [M<Check MSExchangeFB? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckIMC  = "n"   ' [M<Check MSExchangeIMC? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckIS   = "y"   ' [M<Check MSExchangeIS? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckKMS  = "n"   ' [M<Check MSExchangeKMS? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckMSMI = "n"   ' [M<Check MSExchangeMSMI? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckMTA  = "y"   ' [M<Check MSExchangeMTA? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckPCMTA= "n"   ' [M<Check MSExchangePCMTA? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckSA   = "y"   ' [M<Check MSExchangeSA? (y/n)>M] [T<String,1, ,"yn">T]
+Const CheckWEB  = "n"   ' [M<Check MSExchangeWEB? (y/n)>M] [T<String,1, ,"yn">T]
+Const ExtraServiceObj = "" '[M<Services, separated by comma w/ no space>M] [T<String,80,',',>T]
+Const DO_DEBUG  = "y"   ' [M<Write Debug File? (y/n)>M] [T<String,1, ,"yn">T]
+
+'[A<When the Service is detected down, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Dim NT As Object
+Dim OBJ As Object
+		   
+
+Type EVENT_STRUCT
+	EventName As String
+	EventFired As Boolean
+	ThreshCount As Integer
+	ClearCount As Integer
+End Type
+
+Dim eventarray() As EVENT_STRUCT
+
+Option Base 1
+
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+Sub Main()
+
+'Const EXHT_Server = "LONSMHW0S0080"
+
+
+	Dim Objname$
+	Dim Servname$
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+	Dim ServiceObj As String
+	Dim createret As Integer
+
+	'Strip out unnecessary info fromExchange Server Name
+	EXHT_Servertmp="exchange:" & Mid(EXHT_Server, instr(EXHT_Server,":") +1 ,instr(EXHT_Server,"(") - instr(EXHT_Server,":") - 1)
+
+	Dim EventStatus As String
+
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\Exchange_ServicesDown.txt" For Append Access Write As #2
+	End If
+
+	'On First Iteration SetUp Array conatining all services to be checked
+	If iterationcount() = 1 Then
+		'Append all service names to check.
+		If CheckCCMC = "y" Then Servstr= servstr & "MSExchangeCCMC" & ","
+		If CheckCoCo = "y" Then Servstr= servstr & "MSExchangeCoCo" & ","
+		If CheckDS = "y" Then Servstr= servstr & "MSExchangeDS" & ","
+		If CheckDX = "y" Then Servstr= servstr & "MSExchangeDX" & ","
+		If CheckES = "y" Then Servstr= servstr & "MSExchangeES" & ","
+		If CheckFB = "y" Then Servstr= servstr & "MSExchangeFB" & ","
+		If CheckIMC = "y" Then Servstr= servstr & "MSExchangeIMC" & ","
+		If CheckIS = "y" Then Servstr= servstr & "MSExchangeIS" & ","
+		If CheckKMS = "y" Then Servstr= servstr & "MSExchangeKMS" & ","
+		If CheckMSMI = "y" Then Servstr= servstr & "MSExchangeMSMI" & ","
+		If CheckMTA = "y" Then Servstr= servstr & "MSExchangeMTA" & ","
+		If CheckPCMTA = "y" Then Servstr= servstr & "MSExchangePCMTA" & ","
+		If CheckSA = "y" Then Servstr= servstr & "MSExchangeSA" & ","
+		If CheckWEB = "y" Then Servstr= servstr & "MSExchangeWEB" & ","
+		'Add all additional services
+		Servstr=Servstr & ExtraServiceObj
+
+		'Write Debug Info
+		If DO_DEBUG  = "y" Then
+			Print #2 , Time() & "        " & "These are the services to check"
+			Print #2 , Time() & "        " & ServStr
+		End If
+
+
+
+		If Servstr <> "" Then
+			ReDim eventarray (ItemCount(Servstr, ","))
+			For x = 1 To ItemCount(Servstr, ",")
+				eventarray(x).EventName=Item$(ServStr, x,, ",")
+				eventarray(x).EventFired = false
+				eventarray(x).ThreshCount =0
+				eventarray(x).ClearCount =0
+			Next x
+		End If
+		
+	End If
+
+	'Check to make sure that there are services to check
+	If arraydims(eventarray) >0 Then
+		
+		For x = 1 To ubound(eventarray) 'get each Event to check
+			'Write Debug Info		
+			If DO_DEBUG  = "y" Then
+				Print #2 , Time() & "        " &""
+				Print #2 , Time() & "        " & "Checking Service " & eventarray(x).Eventname
+			End If
+
+			'Check if Service is Up
+			If (Not OBJ.ServiceUp(eventarray(x).Eventname)) Then 'check if the Service is up
+				'Write Debug Info
+				If DO_DEBUG  = "y" Then
+					Print #2 , Time() & "        ......" & "Service Not Up"
+				End If
+				'Serviec Down So Clear Count is Reset
+				eventarray(x).ClearCount = 0
+
+				eventarray(x).ThreshCount =eventarray(x).ThreshCount +1	 'if it is not then increase threshold counter
+				
+				If eventarray(x).ThreshCount = CONSEC_TIMES Then
+					'Write Debug Info
+					If DO_DEBUG  = "y" Then
+						Print #2 , Time() & "        ......" & "Service Has been down " & CONSEC_TIMES & " number of times"
+					End If
+
+
+					If (AutoStart = "y") Then
+						'Write Debug Info
+						If DO_DEBUG  = "y" Then
+							Print #2 , Time() & "        ......" & "Try to auto start the service"
+						End If
+
+						If (Not OBJ.ServiceStart(eventarray(x).Eventname)) Then
+							'Write Debug Info
+							If DO_DEBUG  = "y" Then
+								Print #2 , Time() & "        " & "......Failed to auto start the service"
+							End If
+
+							longm = "Failed to restart " & Servname
+							sev = Sev_FailStart
+							EventStatus = "FAIL"
+							eventarray(x).EventFired = TRUE	
+							'FAIL
+						Else
+							'Write Debug Info
+							If DO_DEBUG  = "y" Then
+								Print #2 , Time() & "        " & "......Succeeded to auto start the service"
+							End If
+
+							longm = "Succeeded to restart " & Servname
+							sev = Sev_RestartOK
+							EventStatus = "RESTORED"
+							'RESTORED
+						End If
+ 
+						eventarray(x).ThreshCount = 0
+					Else
+						'Write Debug Info
+						If DO_DEBUG  = "y" Then
+							Print #2 , Time() & "        " & "Parameters not set to try to auto start the service"
+						End If
+
+						longm = "Not set to restart Service " & Servname
+						sev = Sev_NotRestart
+						EventStatus = "DOWN"
+						eventarray(x).EventFired = TRUE	
+						'DOWN
+					End If
+
+				shortmsg=lcase(EXHT_Servertmp) & " Exchange_ServicesDown " & lcase(EXHT_Servertmp) & ":" & Eventarray(x).EventName & ":Status? " & EventStatus & " NULL"
+				MSActions sev,shortmsg, AKPID, Eventarray(x).EventName, longm 
+
+  				End If
+
+			ElseIf 	eventarray(x).EventFired = TRUE Then
+				'Write Debug Info
+				If DO_DEBUG  = "y" Then
+					Print #2 , Time() & "        ......" & "Service Back up and running"
+					Print #2 , Time() & "        ......" & "    Clear Count = " & eventarray(x).ClearCount & " Times "
+				End If
+
+				longm = "Service " & Servname & " is up and running again"
+				sev = Sev_RestartOK
+				EventStatus = "UP"
+				'UP
+				shortmsg=lcase(EXHT_Servertmp) & " Exchange_ServicesDown " & lcase(EXHT_Servertmp) & ":" & Eventarray(x).EventName & ":Status? " & EventStatus & " NULL"
+				MSActions sev,shortmsg, AKPID, Eventarray(x).EventName, longm 
+				eventarray(x).EventFired = False
+				eventarray(x).ThreshCount = 0
+				eventarray(x).ClearCount = 0
+			Else
+				If DO_DEBUG  = "y" Then
+					Print #2 , Time() & "        ......" & "Service Running"
+				End If
+
+				eventarray(x).ClearCount = 	eventarray(x).ClearCount +1
+				If eventarray(x).ClearCount = (5 * CONSEC_TIMES) Then
+					If DO_DEBUG  = "y" Then
+						Print #2 , Time() & "        ......" & "Service Running " & eventarray(x).ClearCount & " Times so ThreshCount is Reset"
+					End If
+					eventarray(x).ClearCount = 0
+					eventarray(x).ThreshCount = 0
+				End If
+
+			End If
+
+
+		Next x
+	End If 
+'Close Debug File
+If DO_DEBUG = "y" Then
+	Close #2
+End If
+	
+End Sub
+
+'### End KPS Section

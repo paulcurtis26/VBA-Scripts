@@ -1,0 +1,339 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exchange_AllPrivateResources.ebs
+'###
+'### Begin KP-Status Section
+'NeedKPW = 1				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1 
+'Description = Report details on ALL Private Folders
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = Daily
+'### End KPC Section
+
+'### Begin Type Section
+Const EXHT_Server = ""
+'### End Type Section
+
+'### Begin KPP Section
+' [V<Returns details on ALL Private folders. For this KS to function, the NT account used by NetiQmc must have mailbox and profile set up properly. You may EITHER enter their names here OR keep nulls and enter names via Security Console.(Version 1.2)>V]
+'### Author 		: Dayanand Sankar (713) 245-1556 (Property of Shell Services International)
+'### Version		: 1.0
+'### Description	: Retrieves mailbox info for all mailboxes
+
+'### Changed by		: Paul Curtis
+'### Date			: 25/03/99
+'### Revision       : 1.1
+'### Enhancements 	: -Added Debug Info
+'###				  -Altered Graphing so All Mail box data strams can be switched off
+'###				  -Added Code to calculate Number of mailboxes
+'###				  -Added Code to Send Event with Number of mailboxes
+'###				  -Added Code to generate two data streams, one for number of mailboxes and one for total space used
+
+'### Changed by		: Paul Curtis
+'### Date			: 29/03/99
+'### Revision       : 1.2
+'### Enhancements 	: -Changed Return code for mailboxes from long to double
+'###				  -Altered data retrieved for each mailbox so that it is parameterised
+
+Const USER_SPECIFIED_DELIMITER = ""		'[M<Delimiter for Event Detail (null for TAB)>M] 
+Const USER_SPECIFIED_PROFILE   = ""		'[M<NetiQmc's Profile Name>M][T<String,160,';',>T]
+Const USER_SPECIFIED_MAILBOX   = ""		'[M<NetiQmc's Mailbox Name>M][T<String,160,';',>T]
+Const DO_EVENT = "y"					'[M<Send Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_MAILGRAPH = "y"				'[M<Send Graph data for individual Mailboxes? (y/n)>M] [T<String,1,,"yn">T]
+Const Severity = 5						'[M<Event Severity >M] [T<Integer,,,1, 40, SevLevel>T]
+Const DO_DEBUG = "n"					'[M<Write Debug Info? (y/n)>M] [T<String,1,,"yn">T]
+Const AKPID = "AKP_NULL"				' [M<Action Taken>M]
+
+'### End KPP Section
+
+'### Begin KPS Section
+Const MAPI_E_LOGON_FAILED = 2147746065
+Const MAPI_E_CALL_FAILED  = 2147500037
+Const MAPI_ERROR          = 2147745792
+Const INVALID_VALUE	= 4294967295
+
+Const ALL_PRIVATE_RESOURCES = 0
+Const VERBOSE_DETAIL_LEVEL = 6
+
+Dim EXCH As Object
+
+Const mailboxinfo = 0
+
+Dim ResourceName As String
+Dim Profile As String
+Dim MailBox As String
+Dim ExchangeServer As String
+Dim SiteName As String
+Dim FullyQualifiedExchangeServerName As String
+Dim Delimiter As String
+Dim TotalMailBoxesNoID As Long
+Dim TotalMailBoxesSizeID As Long
+Dim StreamID  As Long
+Dim DetailLevel As Long
+
+Const NL = chr$(10)	 			' newline
+Const CR = chr$(13)	 			' carriage return
+
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+'/* Function ParseDataFile                                                          */
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+Function ParseDataFile(DataFileName As String,FullyQualifiedExchangeServerName As String) As Long
+
+	Dim ParmCount As Long
+	Dim LineCount As Long
+
+	Dim X         As Long
+	Dim totalsize As Double
+	Dim Numberofmailboxes As Double
+
+	Dim DataPointValue As Double
+
+	Dim InputLine As String
+	Dim Parm As String
+
+	StreamID = StreamID = Datediff("s","Jan 1, 1970",Now)
+
+	If DO_MAILGRAPH = "y" Then
+		DataHeader "AllPrivateResources" , 0, StreamID
+	End If
+
+	LineCount = 0
+
+    Open DataFileName For Input As #1
+	Line Input #1, InputLine
+   	While EOF(1) <> True
+		Line Input #1, InputLine
+
+		ParmCount = ItemCount(InputLine,Delimiter)
+		Datatext = ""
+		For X = 1 To ParmCount
+
+			Parm = Item$(InputLine,X,,Delimiter)
+			Parm = Trim$(Parm)
+
+			If x = 2 And IsNumeric(Parm) Then 
+				totalsize=totalsize + int(Cdbl(Parm) /1024)
+				ThisMailBoxSize = int(Cdbl(Parm) /1024)
+			End If
+
+			If Len(Parm) > 0 Then
+				Select Case X
+					Case 1 
+						Datatext = Datatext & "Display Name			: " & Parm & NL 
+					Case 2 
+						Datatext = Datatext & "Total Size			: " & Parm & NL
+					Case 3
+						Datatext = Datatext & "Content Count		: " & Parm & NL
+					Case 4
+						Datatext = Datatext & "NT User Name			: " & Parm & NL
+					Case 5
+						Datatext = Datatext & "Email Address		: " & Parm & NL
+					Case 6
+						Datatext = Datatext & "Last Logon Time		: " & Parm & NL
+					Case 7
+						Datatext = Datatext & "Last Logoff Time		: " & Parm & NL
+					Case 8
+						Datatext = Datatext & "LStorage Limit Info	: " & Parm & NL
+				End Select
+
+			End If
+				
+		Next X
+		If DO_MAILGRAPH = "y" Then
+			DataLog StreamID, ThisMailBoxSize, Datatext
+		End If
+
+		LineCount = LineCount + 1
+
+	Wend
+	
+	Close #1
+	If iterationcount() = 1 Then
+		TotalMailBoxesNoID = 1
+		TotalMailBoxesSizeID = 2
+		DataHeader "TotalMailBoxesNo" , 0, TotalMailBoxesNoID
+		DataHeader "TotalMailBoxesSize" , 0, TotalMailBoxesSizeID
+	End If
+
+	Numberofmailboxes=LineCount	-2
+	DataLog TotalMailBoxesNoID, Numberofmailboxes, "Number of Mail boxes on server " & FullyQualifiedExchangeServerName & " is " & Numberofmailboxes
+	DataLog TotalMailBoxesSizeID, totalsize/1000, "Total size of mailboxes IN MB on server " & FullyQualifiedExchangeServerName & " is " &  totalsize/1000
+	If DO_EVENT = "y" Then
+		If totalsize > 1000 Then
+			Detailmsg = "The total number of mailboxes on server " & FullyQualifiedExchangeServerName & " = " & Numberofmailboxes & CR & NL & " Total size of mailboxes is " & totalsize / 1000 & " MB"
+			shortmsg= "No. Mail Boxes = " & Numberofmailboxes & " ,Total Size = " & totalsize / 1000 & " MB"
+		Else
+			Detailmsg = "The total number of mailboxes on server " & FullyQualifiedExchangeServerName & " = " & Numberofmailboxes & CR & NL & " Total size of mailboxes is " & totalsize  & " KB"
+			shortmsg= "No. Mail Boxes = " & Numberofmailboxes & " ,Total Size = " & totalsize  & " KB"
+		End If
+		MSActions Severity, shortmsg, AKPID, "", Detailmsg
+	End If
+
+End Function
+
+Const KSName = "Exchange_AllPrivateResources"  'Script Name
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+'/* Sub Main                                                                        */
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+Sub Main()
+	Dim DLLVersion As String
+	Dim AgentMessage As String
+	Dim ErrorMessage As String
+
+	Dim ReturnCode As Double
+
+	If DO_DEBUG  = "y" Then
+	
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+
+		'Put Header for this time the Script has run in the Debug File
+		If iterationcount() =1 Then
+			If createret <> 0 Then
+				Print #2 , Now() & "        " &  "Directory already existed or error creating dir"
+			Else
+				Print #2 , Now() & "        " &  "Directory Created"
+			End If
+		End If
+
+   	End If
+
+
+	If IterationCount() = 1 Then
+
+		ResourceName = "EXHT_Server = " & EXHT_Server
+
+	 	DLLVersion = ""
+		MCVersion "qexcha.dll", DLLVersion
+
+		If DLLVersion < "2.0.270.0" Then
+			If DO_DEBUG="y" Then
+				Print #2 , Now() & "        " &  "QExchA.DLL MUST be at version 2.0.270.0 or higher. Please contact NetIQ Tech Support"
+			End If
+			MCAbort ResourceName, "QExchA.DLL MUST be at version 2.0.270.0 or higher. Please contact NetIQ Tech Support"
+			GoTo EndOfScript
+		End If
+
+		Set EXCH = CreateObject("NetiQAgent.Exch")
+
+		Profile = USER_SPECIFIED_PROFILE
+		Mailbox = USER_SPECIFIED_MAILBOX
+
+		If Profile = "" Or Mailbox = "" Then
+	 		ReturnCode = GetContext("exch", "user", "netiq", "profile", Profile, "mailbox", MailBox)
+
+			If (ReturnCode = 0) Then
+				If DO_DEBUG="y" Then
+					Print #2 , Now() & "        " &  "No Exchange Profile/Mailbox in Security Console"
+				End If
+
+	 			ErrorMessage = "No Exchange Profile/Mailbox in Security Console"
+				MCAbort ResourceName, ErrorMessage
+				GoTo EndOfScript
+	  		End If
+
+		End If
+
+		ExchangeServer = Right$(EXHT_Server, Len(EXHT_Server) - InStr(EXHT_Server, ":"))
+		ExchangeServer = Left$(ExchangeServer,  InStr(ExchangeServer, "(") - 1)
+		SiteName       = Right$(EXHT_Server, Len(EXHT_Server) - InStr(EXHT_Server, "("))
+		SiteName       = Left$(SiteName, InStr(SiteName, ")")-1 )
+		If DO_DEBUG="y" Then
+			Print #2 , Now() & "        " &  "Exchange Server : " & ExchangeServer
+			Print #2 , Now() & "        " &  "Exchange Server : " & SiteName
+		End If
+		
+		FullyQualifiedExchangeServerName = SiteName & "/cn=Configuration/cn=Servers/cn=" & ExchangeServer
+
+		MailBox = SiteName & "/cn=Recipients/cn=" & MailBox
+
+		DetailLevel = VERBOSE_DETAIL_LEVEL
+
+		If USER_SPECIFIED_DELIMITER = "" Then
+			Delimiter = Chr$(9)
+		Else
+			Delimiter = USER_SPECIFIED_DELIMITER
+		End If
+
+   	End If
+
+
+	ReturnCode = EXCH.TopNMailBoxF (FullyQualifiedExchangeServerName, _
+                                    Profile,						   _
+                                    "", 							   _
+                                    MailBox, 						   _
+                                    ALL_PRIVATE_RESOURCES, 			   _
+                                    Delimiter, 					   _
+                                    mailboxinfo, 					   _
+                                    AgentMessage, 					   _
+                                    ErrorMessage)
+
+	If ReturnCode < 0 Then
+		If DO_DEBUG="y" Then
+			Print #2 , Now() & "        " &  "Profile=" & Profile & "; " & "Mailbox=" & MailBox & "; " & ErrorMessage
+		End If
+
+		ErrorMessage = "Profile=" & Profile & "; " & "Mailbox=" & MailBox & "; " & ErrorMessage
+ 		MCAbort ResourceName, ErrorMessage
+		GoTo EndOfScript
+	End If
+	If DO_DEBUG="y" Then
+		Print #2 , Now() & "        " &  "Agent Message (location of temp file) " & AgentMessage
+	End If
+
+	ReturnCode = ParseDataFile(AgentMessage,FullyQualifiedExchangeServerName)
+
+	If DO_DEBUG="y" Then
+		Print #2 , Now() & "        " &  "Number of Mailboxes on system is : " & ReturnCode 
+	End If
+
+
+	Kill AgentMessage
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+EndOfScript:
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+If DO_DEBUG="y" Then
+	Close #2
+End If
+
+End Sub
+'### End KPS Section

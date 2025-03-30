@@ -1,0 +1,193 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exchange_SSISvrIMCNDR.ks
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.361.8.2"
+Const KSVerID = "3.0"
+'Comment=  Changed to Command Post 3.0 Syntax
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors Exchange Server IMC Non-Delivery Reports
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = ThirtyM
+'### End KPC Section
+
+'### Begin Type Section
+Const EXHT_IMCQueue = ""
+'### End Type Section
+
+'### Begin KPP Section
+
+'### Changed by		: Paul Curtis 171 257 7373 (Property of Shell Services International)
+'### Date			: 28/7/98
+'### Revision       : 3.0
+'### Enhancements 	: Made Command post
+'### 			 	: Added Send_normal
+'### 			 	: Added DO_NUMBERS
+'### 			 	: Added DLL Check
+
+
+'[V<CPReady.Monitors Exchange Server IMC Non-Delivery Reports (NDR) for both Inbound and Outbound. When the server or a gateway is unable to deliver a mail message, it sends an NDR to the originator (Version 3.0).>V]
+Const DO_EVENT = "y"	'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"		'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_NUMBERS = "y" 		'[M<Show numbers? (y/n)>M][T<string,1,' ',yn">T]
+Const QINBOUND_OVER = 10	'[M<NDR for Inbound Mail > >M] [T<Integer,,, 0, 9999, # >T]
+Const QOUTBOUND_OVER = 10	'[M<NDR for Outbound Mail > >M] [T<Integer,,, 0, 9999, # >T]
+Const SEND_NORMAL = "y"		'[M<Send Mesage When NDR is Normal (AutoClear Message) ? (y/n)>M] [T<String,1,,"yn">T]
+Const CONSEC_TIME = 3		'[M<Consecutive times>M] [T<long,,,1, 999999, #>T]
+Const Severity = 5			'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Sev_Normal = 40 		'[M<Event Severity - Normal>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When the Threshold is exceeded, the selected action is taken. >A]
+Const AKPID = "AKP_NULL"	' [M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Dim NT As Object
+Dim OBJ As Object
+Dim Machinenamestr As String
+Dim ConTimesOver(2) As Integer
+Dim ConTimesUnder(2) As Integer
+Dim EventFired(2) As Boolean
+
+Function AlterString(sString As String, sCharToReplace As String, sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+	
+Sub GetCounterValue(ObjectName As String, CounterName As String, InstanceName As String, nDataID As Integer, TH_OVER As Integer)
+	Dim dval As Double
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+
+	dval = OBJ.CounterValue(ObjectName, CounterName, InstanceName)
+
+	If dval = -1 Then
+		resmsg = "EXHT_IMCQueue = " & EXHT_IMCQueue
+		longmsg = "Can't get value of " & ObjectName & " " & CounterName & " " & InstanceName
+		shortmsg = 	"Can't get value of " & CounterName
+		'MSActions Severity, shortmsg, AKPID, resmsg, longmsg
+		MCAbort resmsg, shortmsg
+	End If
+	If DO_EVENT = "y" And dval > TH_OVER Then
+		ConTimesOver(nDataID) = ConTimesOver(nDataID) + 1
+		ConTimesUnder(nDataID)=0
+		If ConTimesOver(nDataID) = CONSEC_TIME Then
+			resmsg = "EXHT_IMCQueue = " & EXHT_IMCQueue
+			longmsg = "Counter value for " & ObjectName & "-" & CounterName & "-" & InstanceName & " is " & _
+				CStr(dval) & "; >TH = " & Cstr(TH_OVER)
+			If DO_NUMBERS = "y" Then
+				ShortMsg = MachineNamestr & " " & AlterString(CounterName," ","-") & " EXCEEDED " & CStr(dval)
+			Else
+				ShortMsg = MachineNamestr & " " & AlterString(CounterName," ","-") & " EXCEEDED NULL"
+			End If
+			MSActions SEVERITY, shortmsg, AKPID, resmsg, longmsg
+			ConTimesOver(nDataID) = 0 
+			EventFired(nDataID) = true
+		End If
+	End If
+
+
+	If DO_EVENT = "y" And dval < TH_OVER Then
+		ConTimesUnder(nDataID) = ConTimesUnder(nDataID) + 1
+		'Stops Var overflowing if continually alright
+		If ConTimesUnder(nDataID) = 100 Then
+			ConTimesUnder(nDataID) = 99
+		End If
+		ConTimesOver(nDataID) = 0 
+		If ConTimesUnder(nDataID) = CONSEC_TIME And EventFired(nDataID) = True Then
+			resmsg = "EXHT_IMCQueue = " & EXHT_IMCQueue
+			longmsg = "Counter value for " & ObjectName & "-" & CounterName & "-" & InstanceName & " is " & _
+				CStr(dval) & "; <TH = " & Cstr(TH_OVER)
+			If DO_NUMBERS = "y" Then
+				ShortMsg = MachineNamestr & " " & AlterString(CounterName," ","-") & " NORMAL " & CStr(dval)
+			Else
+				ShortMsg = MachineNamestr & " " & AlterString(CounterName," ","-") & " NORMAL NULL"
+			End If
+			If SEND_NORMAL = "y" Then
+				MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+			Else
+				If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+					MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+				End If
+			End If
+			ConTimesUnder(nDataID) = 0 
+			EventFired(nDataID) = false
+		End If
+	End If
+
+	' Check threshold, and do action
+
+	' Do graphing
+	If DO_DATA = "y" Then
+		If IterationCount() = 1 Then
+			DataHeader OBJ.CounterLegend(ObjectName, CounterName, InstanceName) , 0, nDataID
+		End If
+		DataLog nDataID, dval, ""
+	End If
+
+End Sub
+
+Sub Main()
+	If iterationcount() = 1 Then
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+	    MachineName1 = Space$(16)
+    	NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+		Machinenamestr = lcase(trim(Machinenamestr))
+	
+		Dim version As String
+
+	 	version = ""
+		MCVersion "qexcha.dll", version
+
+		If version < "2.0.274.2" Then
+			longmsg = "The version of Qexcha.dll is " & version & " ."
+			longmsg = longmsg & Chr$(10) & "This KS needs the Qexcha.dll version 2.0.274.2 or higher on SP2"
+			resmsg = "EXHT_Server" = EXHT_Server
+			MCAbort resmsg, longmsg
+		End If
+	
+
+	End If
+
+	GetCounterValue "MSExchangeIMC", "NDRs Total Inbound", "MSExchangeIMC", 0, QINBOUND_OVER
+	GetCounterValue "MSExchangeIMC", "NDRs Total Outbound","MSExchangeIMC", 1, QOUTBOUND_OVER
+
+End Sub
+
+'### End KPS Section

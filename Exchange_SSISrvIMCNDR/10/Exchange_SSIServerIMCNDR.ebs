@@ -1,0 +1,80 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exchange_ServerIMCNDR.ks
+'###
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors Exchange Server IMC Non-Delivery Reports
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = ThirtyM
+'### End KPC Section
+
+'### Begin Type Section
+'### drop target is machine
+Const EXHT_IMCQueue = ""
+'### End Type Section
+
+'### Begin KPP Section
+'[V<Monitors Exchange Server IMC Non-Delivery Reports (NDR) for both Inbound and Outbound. When the server or a gateway is unable to deliver a mail message, it sends an NDR to the originator.>V]
+Const DO_EVENT = "y"	'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"		'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const QINBOUND_OVER = 10	'[M<NDR for Inbound Mail > >M] [T<Integer,,, 0, 9999, # >T]
+Const QOUTBOUND_OVER = 10	'[M<NDR for Outbound Mail > >M] [T<Integer,,, 0, 9999, # >T]
+Const Severity = 5			'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When the Threshold is exceeded, the selected action is taken. >A]
+Const AKPID = "AKP_NULL"	' [M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Dim NT As Object
+Dim OBJ As Object
+	
+Sub GetCounterValue(ObjectName As String, CounterName As String, InstanceName As String, nDataID As Integer, TH_OVER As Integer)
+	Dim dval As Double
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+
+	dval = OBJ.CounterValue(ObjectName, CounterName, InstanceName)
+
+	If dval = -1 Then
+		resmsg = "EXHT_IMCQueue = " & EXHT_IMCQueue
+		longmsg = "Can't get value of " & ObjectName & " " & CounterName & " " & InstanceName
+		shortmsg = 	"Can't get value of " & CounterName
+		'MSActions Severity, shortmsg, AKPID, resmsg, longmsg
+		MCAbort resmsg, shortmsg
+	End If
+
+	' Check threshold, and do action
+	If DO_EVENT = "y" Then
+		If dval > TH_OVER Then
+			resmsg = "EXHT_IMCQueue = " & EXHT_IMCQueue
+			longmsg = "Counter value for " & ObjectName & "-" & CounterName & "-" & InstanceName & " is " & _
+				CStr(dval) & "; >TH = " & Cstr(TH_OVER)
+			MSActions Severity, CounterName & " Above threshold", AKPID, resmsg, longmsg
+		End If
+
+  	End If
+
+	' Do graphing
+	If DO_DATA = "y" Then
+		If IterationCount() = 1 Then
+			DataHeader OBJ.CounterLegend(ObjectName, CounterName, InstanceName) , 0, nDataID
+		End If
+		DataLog nDataID, dval, ""
+	End If
+
+End Sub
+
+Sub Main()
+	GetCounterValue "MSExchangeIMC", "NDRs Total Inbound", "MSExchangeIMC", 0, QINBOUND_OVER
+	GetCounterValue "MSExchangeIMC", "NDRs Total Outbound","MSExchangeIMC", 1, QOUTBOUND_OVER
+
+End Sub
+
+'### End KPS Section

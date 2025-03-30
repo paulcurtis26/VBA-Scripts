@@ -1,0 +1,162 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exch_SSILogFileSize.ebs
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.361.8.2"
+Const KSVerID = "3.0"
+'Comment=  Changed to Command Post 3.0 Syntax
+
+'### End KP-Version Section
+
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1 
+'Description = Monitors file size of log files under MDBDATA and DSADATA directories
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = Hourly
+'### End KPC Section
+
+'### Begin Type Section
+Const EXHT_Server = ""
+'### End Type Section
+
+'### Begin KPP Section
+
+'### Changed by		: Paul Curtis 171 257 7373 (Property of Shell Services International)
+'### Date			: 27/7/98
+'### Revision       : 3.0
+'### Enhancements 	: Made Command post
+'### 			 	: Added Send_normal
+'### 			 	: Added DO_NUMBERS
+'### 			 	: Added DLL Check
+
+' The type and range of each variable can be enforced as follows
+' [T<Integer, maxList, delim, minValue, maxValue, units>T]	maxList and delim are place holders
+' [T<String, maxChars, delim, legalChars>T]
+' [M<message text>M]
+'
+' [V<Monitors the file size of log files in directories MDBDATA and DSADATA. Set Log to one and ONLY one of the types (not case sensitive): EDB for transaction log files, RES for reserved transaction log files, DLV, SND or ALL for all files.(Ver 3.0)>V]
+Const DO_EVENT = "y"		'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"			'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_NUMBERS = "y" 		'[M<Show numbers? (y/n)>M][T<string,1,' ',yn">T]
+Const SEND_NORMAL = "y"		'[M<Send Mesage When Log File Size is Normal (AutoClear Message) ? (y/n)>M] [T<String,1,,"yn">T]
+Const CONSEC_TIME = 3		'[M<Consecutive times>M] [T<long,,,1, 999999, #>T]
+Const TH_UTIL = 400     	'[M<File Space Size > >M] [T<Integer,,, 0, 32767, MB>T]
+Const Log = "ALL" 			'[M<Select ONE Type (EDB/RES/DLV/SND/ALL)>M]
+Const SEVERITY = 5			'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Sev_Normal = 40		'[M<Event Severity - Normal>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When the file size of the selected log file type exceeds the threshold, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+
+'### End KPP Section
+
+'### Begin KPS Section
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Dim ConTimesOver As Integer
+Dim ConTimesUnder As Integer
+Dim EventFired As Boolean
+Dim Exch As Object
+Dim Machinenamestr As String
+Sub Main()
+	Dim dval As Double
+
+	Set Exch = CreateObject("NetiQAgent.Exch")
+ 	If IterationCount() = 1 And DO_DATA = "y" Then
+		DataHeader "Exchange Log File Size^^MB", 0, 1
+	End If
+
+
+
+	If iterationcount() = 1 Then
+		Dim version As String
+	 	version = ""
+		MCVersion "qexcha.dll", version
+
+		If version < "2.0.274.2" Then
+			longmsg = "The version of Qexcha.dll is " & version & " ."
+			longmsg = longmsg & Chr$(10) & "This KS needs the Qexcha.dll version 2.0.274.2 or higher on SP2"
+			resmsg = "EXHT_Server" = EXHT_Server
+			MCAbort resmsg, longmsg
+		End If
+
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+    	MachineName1 = Space$(16)
+    	NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+		Machinenamestr = lcase(trim(Machinenamestr))
+		EventFired = false
+	End If
+
+	dval = Exch.LogFileSize(Log) / (1024.0 * 1024.0)
+
+	If DO_EVENT = "y" And dval > TH_UTIL Then
+		ConTimesOver = ConTimesOver + 1
+		ConTimesUnder=0
+		If ConTimesOver	= CONSEC_TIME Then
+			resmsg = "EXHT_Server = " & EXHT_Server
+			longmsg = " Log Files (" & Log & ") used by " & EXHT_Server & " [MB] is " & CStr(dval) &_
+				"; >TH = " & CStr(TH_UTIL)
+			If DO_NUMBERS = "y" Then
+				ShortMsg = MachineNamestr & " LOG-SIZE EXCEEDED " & CStr(dval)
+			Else
+				ShortMsg = MachineNamestr & " LOG-SIZE EXCEEDED NULL"
+			End If
+			MSActions SEVERITY, shortmsg, AKPID, resmsg, longmsg
+			ConTimesOver = 0 
+			EventFired = true
+		End If
+	End If
+
+
+	If DO_EVENT = "y" And dval < TH_UTIL Then
+		ConTimesUnder = ConTimesUnder + 1
+		'Stops Var overflowing if continually alright
+		If ConTimesUnder = 100 Then
+			ConTimesUnder = 99
+		End If
+		ConTimesOver = 0 
+		If ConTimesUnder = CONSEC_TIME And EventFired = True Then
+			resmsg = "EXHT_Server = " & EXHT_Server
+			longmsg = " Log Files (" & Log & ") used by " & EXHT_Server & " [MB] is " & CStr(dval) &_
+				"; >TH = " & CStr(TH_UTIL)
+			If DO_NUMBERS = "y" Then
+				ShortMsg = MachineNamestr & " LOG-SIZE NORMAL " & CStr(dval)
+			Else
+				ShortMsg = MachineNamestr & " LOG-SIZE NORMAL NULL"
+			End If
+			If SEND_NORMAL = "y" Then
+				MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+			Else
+				If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+					MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+				End If
+			End If
+			ConTimesUnder = 0 
+			EventFired = false
+		End If
+	End If
+
+
+	If DO_DATA = "y" Then
+		DataLog 1, dval, Exch.LogFileAgtMsg(Log)
+	End If
+End Sub
+
+'### End KPS Section

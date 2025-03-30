@@ -1,0 +1,63 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exch_LogFileSize.ebs
+'###
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1 
+'Description = Monitors file size of log files under MDBDATA and DSADATA directories
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = Hourly
+'### End KPC Section
+
+'### Begin Type Section
+Const EXHT_Server = ""
+'### End Type Section
+
+'### Begin KPP Section
+' The type and range of each variable can be enforced as follows
+' [T<Integer, maxList, delim, minValue, maxValue, units>T]	maxList and delim are place holders
+' [T<String, maxChars, delim, legalChars>T]
+' [M<message text>M]
+'
+' [V<Monitors the file size of log files in directories MDBDATA and DSADATA. Set Log to one and ONLY one of the types (not case sensitive): EDB for transaction log files, RES for reserved transaction log files, DLV, SND or ALL for all files.>V]
+Const DO_EVENT = "y"		'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"			'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const TH_UTIL = 400     	'[M<File Space Size > >M] [T<Integer,,, 0, 32767, MB>T]
+Const Log = "ALL" 			'[M<Select ONE Type (EDB/RES/DLV/SND/ALL)>M]
+Const SEVERITY = 5			'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When the file size of the selected log file type exceeds the threshold, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+
+'### End KPP Section
+
+'### Begin KPS Section
+Dim Exch As Object
+Sub Main()
+	Dim dval As Double
+	Set Exch = CreateObject("NetiQAgent.Exch")
+ 	If IterationCount() = 1 And DO_DATA = "y" Then
+		DataHeader "Exchange Log File Size^^MB", 0, 1
+	End If
+
+	dval = Exch.LogFileSize(Log) / (1024.0 * 1024.0)
+
+	If DO_EVENT = "y" And dval > TH_UTIL Then
+		resmsg = "EXHT_Server = " & EXHT_Server
+		longmsg = " Log Files (" & Log & ") used by " & EXHT_Server & " [MB] is " & CStr(dval) &_
+			"; >TH = " & CStr(TH_UTIL)
+		shortmsg =  "Exchange log too big"
+		MSActions SEVERITY, shortmsg, AKPID, resmsg, longmsg
+	End If
+
+	If DO_DATA = "y" Then
+		DataLog 1, dval, Exch.LogFileAgtMsg(Log)
+	End If
+End Sub
+
+'### End KPS Section

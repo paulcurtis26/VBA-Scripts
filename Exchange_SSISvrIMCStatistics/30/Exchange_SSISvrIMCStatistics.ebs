@@ -1,0 +1,206 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exchange_SSISvrIMCStatistics.ks
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.361.8.2"
+Const KSVerID = "3.0"
+'Comment=  Changed to Command Post 3.0 Syntax
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors Exchange Server IMC Statistics
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = Hourly
+'### End KPC Section
+
+'### Begin Type Section
+'### drop target is machine
+Const EXHT_IMCQueue = ""
+'### End Type Section
+
+'### Begin KPP Section
+
+'### Changed by		: Paul Curtis 171 257 7373 (Property of Shell Services International)
+'### Date			: 28/7/98
+'### Revision       : 3.0
+'### Enhancements 	: Made Command post
+'### 			 	: Added Send_normal
+'### 			 	: Added DO_NUMBERS
+'### 			 	: Added DLL Check
+
+
+'[V<CPReady. Monitors Exchange Server IMC Statistics: Inbound Messages Total, Outbound Messages Total.(Version 3.0)>V]
+Const DO_EVENT = "y"	'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"		'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const USE_DELTA = "n"	'[M<Use Delta? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_NUMBERS = "y" 		'[M<Show numbers? (y/n)>M][T<string,1,' ',yn">T]
+Const INBOUND_OVER = 5000	'[M<Inbound Messages Total Over Threshold > >M] [T<Integer,,, -9999, 9999, ># >T]
+Const OUTBOUND_OVER = 5000	'[M<Outbound Messages Total Over threshold > >M] [T<Integer,,, -9999, 9999, ># >T]
+Const SEND_NORMAL = "y"		'[M<Send Mesage When NDR is Normal (AutoClear Message) ? (y/n)>M] [T<String,1,,"yn">T]
+Const CONSEC_TIME = 3		'[M<Consecutive times>M] [T<long,,,1, 999999, #>T]
+Const Severity = 5			'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Sev_Normal = 40			'[M<Event Severity - Normal>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When the Threshold is exceeded, the selected action is taken. >A]
+Const AKPID = "AKP_NULL"	' [M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Dim NT As Object
+Dim OBJ As Object
+Dim strDelta As String
+Dim Machinenamestr As String
+Dim ConTimesOver(2) As Integer
+Dim ConTimesUnder(2) As Integer
+Dim EventFired(2) As Boolean
+
+Function AlterString(sString As String, sCharToReplace As String, sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+	
+Function GetCounterValue(ObjectName As String, CounterName As String, InstanceName As String, nDataID As Integer, TH_OVER As Integer, LastValue As Double) As Double
+	Dim dval As Double
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+
+	If IterationCount() = 1 Then
+		LastValue = OBJ.CounterValue(ObjectName, CounterName, InstanceName)
+		strDelta = ""
+		If USE_DELTA = "y" Then strDelta = "-Delta"
+	End If
+	dval = OBJ.CounterValue(ObjectName, CounterName, InstanceName)
+	GetCounterValue = dval
+	If dval = -1 Then
+		resmsg = "EXHT_Server = " & EXHT_Server
+		longmsg = "Counter (\" & ObjectName & "\" & CounterName & "\" & InstanceName & ") value not available "
+		MCAbort resmsg, longmsg 
+	End If
+
+	If USE_DELTA = "y" Then
+		dval = dval - LastValue
+	End If
+	' Check threshold, and do action
+
+	If DO_EVENT = "y" And dval > TH_OVER Then
+		ConTimesOver(nDataID) = ConTimesOver(nDataID) + 1
+		ConTimesUnder(nDataID)=0
+		If ConTimesOver(nDataID) = CONSEC_TIME Then
+	   		resmsg = "EXHT_IMCQueue = " & EXHT_IMCQueue
+			longmsg = strDelta & "Counter value for \" & ObjectName & "\" & CounterName & "\" & InstanceName & " is " & _
+				Format$(dval, "0.00") & "; >TH = " & Cstr(TH_OVER)
+			If DO_NUMBERS = "y" Then
+				ShortMsg = MachineNamestr & " " & AlterString(CounterName," ","-") & strDelta & " EXCEEDED " & Format$(dval+0.001, "0.00")
+			Else
+				ShortMsg = MachineNamestr & " " & AlterString(CounterName," ","-") & strDelta & " EXCEEDED NULL"
+			End If
+			MSActions SEVERITY, shortmsg, AKPID, resmsg, longmsg
+			ConTimesOver(nDataID) = 0 
+			EventFired(nDataID) = true
+		End If
+	End If
+
+
+	If DO_EVENT = "y" And dval < TH_OVER Then
+		ConTimesUnder(nDataID) = ConTimesUnder(nDataID) + 1
+		'Stops Var overflowing if continually alright
+		If ConTimesUnder(nDataID) = 100 Then
+			ConTimesUnder(nDataID) = 99
+		End If
+		ConTimesOver(nDataID) = 0 
+		If ConTimesUnder(nDataID) = CONSEC_TIME And EventFired(nDataID) = True Then
+	   		resmsg = "EXHT_IMCQueue = " & EXHT_IMCQueue
+			longmsg = strDelta & "Counter value for \" & ObjectName & "\" & CounterName & "\" & InstanceName & " is " & _
+				Format$(dval, "0.00") & "; <TH = " & Cstr(TH_OVER)
+			If DO_NUMBERS = "y" Then
+				ShortMsg = MachineNamestr & " " & AlterString(CounterName," ","-") & strDelta & " NORMAL " & Format$(dval+0.001, "0.00")
+			Else
+				ShortMsg = MachineNamestr & " " & AlterString(CounterName," ","-") & strDelta & " NORMAL NULL"
+			End If
+			If SEND_NORMAL = "y" Then
+				MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+			Else
+				If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+					MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+				End If
+			End If
+			ConTimesUnder(nDataID) = 0 
+			EventFired(nDataID) = false
+		End If
+	End If
+
+	' Do graphing
+	If DO_DATA = "y" Then
+		If IterationCount() = 1 Then
+			DataHeader strDelta & OBJ.CounterLegend(ObjectName, CounterName, InstanceName) , 0, nDataID
+		End If
+		strDetail = Now() & ", " & strDelta & "Value=" & dval & ", Last value=" & LastValue
+		DataLog nDataID, dval, strDetail
+	End If
+
+End Function
+
+Private dIMCInbound As Double
+Private dIMCOutbound As Double
+
+Sub Main()
+	If iterationcount() = 1 Then
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+	    MachineName1 = Space$(16)
+    	NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+		Machinenamestr = lcase(trim(Machinenamestr))
+	
+		Dim version As String
+
+	 	version = ""
+		MCVersion "qexcha.dll", version
+
+		If version < "2.0.274.2" Then
+			longmsg = "The version of Qexcha.dll is " & version & " ."
+			longmsg = longmsg & Chr$(10) & "This KS needs the Qexcha.dll version 2.0.274.2 or higher on SP2"
+			resmsg = "EXHT_Server" = EXHT_Server
+			MCAbort resmsg, longmsg
+		End If
+	
+
+	End If
+
+	dIMCInbound = GetCounterValue ("MSExchangeIMC", "Inbound Messages Total", "MSExchangeIMC", 0, INBOUND_OVER, dIMCInbound)
+	dIMCOutbound = GetCounterValue ("MSExchangeIMC", "Outbound Messages Total","MSExchangeIMC", 1, OUTBOUND_OVER, dIMCOutbound)
+End Sub
+
+'### End KPS Section

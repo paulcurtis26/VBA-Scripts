@@ -1,0 +1,135 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exchange_MsgsBetweenSites.ebs
+'###
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1 
+'Description = Monitors the number and size of messages between sites  
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = Daily
+'### End KPC Section
+
+'### Begin Type Section
+Const EXHT_Server = ""
+'### End Type Section
+
+'### Begin KPP Section
+' The type and range of each variable can be enforced as follows
+' [T<Integer, maxList, delim, minValue, maxValue, units>T]	maxList and delim are place holders
+' [T<String, maxChars, delim, legalChars>T]
+' [M<message text>M]
+'
+' [V<Monitors the total number and size of messages from/to other sites during the given number of past days including today.  The Tracking logs must be enabled through the Exchange Administrator.>V]
+Const DO_EVENT = "y"		'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"			'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const TH_UTIL1 = 300	    '[M<Number of Mail (Received) > >M] [T<Integer,,, 0, 32767, Mails>T]
+Const TH_UTIL2 = 300	    '[M<Number of Mail (Sent) > >M] [T<Integer,,, 0, 32767, Mails>T]
+Const SYS_MSG = "n"			'[M<Include System Message? (y/n)>M] [T<String,1,,"yn">T]
+Const PastNDays = 3			'[M<# of Past Days>M] [T<Integer,,,1,100,#>T]
+Const SEVERITY = 5			'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When the total file size of mails received or sent exceeds the given thresholds, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+
+'### End KPP Section
+
+'### Begin KPS Section
+'Identifies the top n message senders
+Dim Exch As Object
+Sub Main()
+	Dim flag As Long
+	Dim dval As Long
+	Dim ErrorCode As Long
+	Dim Result	As String
+	Dim ErrorMsg As String
+	Dim size1 As Double
+	Dim s1 As Double
+	Dim dval1 As Double
+	Dim size2 As Double
+	Dim s2 As Double
+	Dim dval2 As Double
+	Dim d1 As Long
+	Dim d2 As Long
+	Dim Result1 As String
+	Dim Result2 As String
+	Dim version As String
+
+	Dim dwSize1 As Long
+	Dim dwSize2 As Long
+
+ 	version = ""
+	MCVersion "qexcha.dll", version
+
+
+	If SYS_MSG = "y" Then
+		flag = 1
+	Else 
+		flag = 0
+	End If
+
+	Set Exch = CreateObject("NetiQAgent.Exch")
+
+	If version >= "3.0" Then 
+		dval = Exch.MessagesBetweenSiteD(flag, PastNDays, d1, size1, d2, size2, Result, ErrorCode, ErrorMsg)
+		s1 = size1 / (1024.0)
+		s2 = size2 / (1024.0)
+	Else
+		dval = Exch.MessagesBetweenSite(flag, PastNDays, d1, dwSize1, d2, dwSize2, Result, ErrorCode, ErrorMsg)
+		s1 = dwSize1 / (1024.0)
+		s2 = dwSize2 / (1024.0)
+	End If
+	dval1 = d1
+	dval2 = d2
+
+	If ErrorCode <> 0 Then
+		MCAbort "EXHT_Server = " & EXHT_Server, "There is no log file."
+	End If
+
+	If IterationCount() = 1 And DO_DATA = "y" Then
+		DataHeader "Messages Number From Other Site: (Mails) ", 0, 1 
+		DataHeader "Messages Size From Other Site: (KB) ", 0, 2 
+		DataHeader "Messages Number To Other Site: (Mails) ", 0, 3
+		DataHeader "Messages Size To Other Site: (KB) ", 0, 4 
+	End If
+
+
+	If DO_EVENT = "y" And dval1 > TH_UTIL1 Then
+		resmsg = "EXHT_Server = " & EXHT_Server
+		crlf$ = Chr$(13) + Chr$(10)
+		longmsg = " Number of mails received from other site  is "  _
+				  & format$(dval1, "0.00") & "; >TH = " _
+				  & CStr(TH_UTIL1) 
+		shortmsg = 	"Too many mails received from other site"
+		MSActions SEVERITY, shortmsg, AKPID, resmsg, longmsg
+	End If
+
+	If DO_EVENT = "y" And dval2 > TH_UTIL2 Then
+		resmsg = "EXHT_Server = " & EXHT_Server
+		crlf$ = Chr$(13) + Chr$(10)
+		longmsg = " Number of mails sent to other site  is "  _
+				  & format$(dval2, "0.00") & "; >TH = " _
+				  & CStr(TH_UTIL2) 
+		shortmsg = 	"Too many mails sent to other site"
+		MSActions SEVERITY, shortmsg, AKPID, resmsg, longmsg
+	End If
+
+
+	If DO_DATA = "y" Then
+		If Result <> "" Then
+			Result1 = Left$(Result, Instr(Result, "Outgoing Messages") -1)
+			Result2 = Right$(Result, Len(Result) - Instr(Result, "Outgoing Messages") + 1)
+		Else
+			Result1 = ""
+			Result2 = ""
+		End If
+		DataLog 1, dval1, "The number of mails received from other site is " & Format$(dval1, "0") & " ." & Chr$(13) + Chr$(10) & Result1
+		DataLog 2, s1, "The size of mails received from other site is " & Format$(s1, "0.00") & " KB." & Chr$(13) + Chr$(10) & Result1
+		DataLog 3, dval2, "The number of mails sent to  other site is " & Format$(dval2, "0") & " ." & Chr$(13) + Chr$(10) & Result2
+		DataLog 4, s2, "The size of mails sent to other site is " & Format$(s2, "0.00") & " KB." & Chr$(13) + Chr$(10) & Result2
+	End If
+End Sub
+'### End KPS Section

@@ -1,0 +1,256 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exchange_SSIMsgsThroughIMC.ebs
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.361.8.2"
+Const KSVerID = "3.0"
+'Comment=  Changed to Command Post 3.0 Syntax
+'### End KP-Version Section
+
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1 
+'Description = Monitors the number and size of messages through Internet Mail Connector  
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = Daily
+'### End KPC Section
+
+'### Begin Type Section
+Const EXHT_Server = ""
+'### End Type Section
+
+'### Begin KPP Section
+
+'### Changed by		: Paul Curtis (171) 257-7373 (Property of Shell Services International)
+'### Date			: 28/7/99
+'### Revision       : 3.0
+'### Enhancements 	: -Added Command Post
+'### 				: -Added Send Normal
+'### 				: -Added Consecutive Times
+'### 				: -Added DLL Version Check 
+'### 				: -Made App Manager3 Compliant - No Comments , Not enough time
+
+' The type and range of each variable can be enforced as follows
+' [T<Integer, maxList, delim, minValue, maxValue, units>T]	maxList and delim are place holders
+' [T<String, maxChars, delim, legalChars>T]
+' [M<message text>M]
+'
+' [V<CPReady. Monitors the total number and size of messages through IMC during the given number of past days including today.  The Tracking logs must be enabled (Version 3.0).>V]
+Const DO_EVENT = "y"		'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"			'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_NUMBERS = "y" 		'[M<Show numbers? (y/n)>M][T<string,1,' ',yn">T]
+Const CONSEC_TIME = 1		'[M<Consecutive times>M] [T<long,,,1, 999999, #>T]
+Const TH_UTIL1 = 300	    '[M<Number of Mail (Received) > >M] [T<Integer,,, 0, 32767, Mails>T]
+Const TH_UTIL2 = 300	    '[M<Number of Mail (Sent) > >M] [T<Integer,,, 0, 32767, Mails>T]
+Const SYS_MSG = "n"			'[M<Include System Message? (y/n)>M] [T<String,1,,"yn">T]
+Const PastNDays = 3			'[M<# of Past Days>M] [T<Integer,,,1,100,#>T]
+Const SEVERITY = 5			'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+Const SEND_NORMAL = "y"		'[M<Send Mesage When Number of Messages is Normal (AutoClear Message) ? (y/n)>M] [T<String,1,,"yn">T]
+
+'[A<When the total file size of mails received or sent exceeds the given thresholds, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+
+'### End KPP Section
+
+'### Begin KPS Section
+
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+'Identifies the top n message senders
+Dim Exch As Object
+
+Dim ReceivedCount As Integer
+Dim SentCount As Integer
+Dim ReceivedClrCount As Integer
+Dim SentClrCount As Integer
+Dim ReceivedEvent As Boolean
+Dim SentEvent As Boolean
+
+Sub Main()
+	Dim flag As Long
+	Dim dval As Long
+	Dim ErrorCode As Long
+	Dim Result	As String
+	Dim ErrorMsg As String
+	Dim size1 As Long
+	Dim s1 As Long
+	Dim dval1 As Long
+	Dim size2 As Long
+	Dim s2 As Long
+	Dim dval2 As Long
+    Dim NameSize As Long
+    Dim X As Long
+	Dim Machinename1 As String
+	Dim Machinenamestr As String
+	Dim y As Integer
+    MachineName1 = Space$(16)
+    NameSize = Len(MachineName1)
+    X = GetComputerName(Machinename1,NameSize)
+	For y = 1 To Len(Machinename1)
+		If ASC(Mid(Machinename1,y,1)) <> 0 Then
+			Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+		End If
+	Next y
+	Machinenamestr = lcase(trim(Machinenamestr))
+
+	Dim version As String
+
+ 	version = ""
+	MCVersion "qexcha.dll", version
+
+	If version < "2.0.274.2" Then
+		longmsg = "The version of Qexcha.dll is " & version & " ."
+		longmsg = longmsg & Chr$(10) & "This KS needs the Qexcha.dll version 2.0.274.2 or higher on SP2"
+		resmsg = "EXHT_Server" = EXHT_Server
+		MCAbort resmsg, longmsg
+	End If
+
+
+	If SYS_MSG = "y" Then
+		flag = 1
+	Else 
+		flag = 0
+	End If
+
+	Set Exch = CreateObject("NetiQAgent.Exch")
+
+	dval = Exch.MessagesThroughIMC(flag, PastNDays, dval1, size1, dval2, size2, Result, ErrorCode, ErrorMsg)
+	s1 = size1 / (1024.0)
+	s2 = size2 / (1024.0)
+
+	If ErrorCode <> 0 Then
+		MCAbort "EXHT_Server = " & EXHT_Server, "There is no log file."
+	End If
+
+	If IterationCount() = 1 Then
+		ReceivedEvent = false
+		SentEvent = false
+		If DO_DATA = "y" Then
+			DataHeader "Messages (Received) Number Through IMC: (Mails) ", 0, 1 
+			DataHeader "Messages (Received) Size Through IMC: (KB) ", 0, 2 
+			DataHeader "Messages (Sent) Number Through IMC: (Mails) ", 0, 3 
+			DataHeader "Messages (Sent) Size Through IMC: (KB) ", 0, 4 
+		End If
+	End If
+
+
+	If DO_EVENT = "y" And dval1 > TH_UTIL1 Then
+		ReceivedCount = ReceivedCount + 1
+		ReceivedClrCount = 0
+		If ReceivedCount = CONSEC_TIME Then
+			resmsg = "EXHT_Server = " & EXHT_Server
+			crlf$ = Chr$(13) + Chr$(10)
+			longmsg = " Number of mail received through IMC  is "  _
+					  & format$(dval1, "0.00") & "; >TH = " _
+					  & CStr(TH_UTIL1) 
+			If DO_NUMBERS = "y" Then
+				shortmsg = Machinenamestr & " RECEIVED EXCEEDED " & format$(dval1, "0.00")
+			Else
+				shortmsg = Machinenamestr & " RECEIVED EXCEEDED NULL"	
+			End If
+			MSActions SEVERITY, shortmsg, AKPID, resmsg, longmsg
+			ReceivedCount = 0 
+			ReceivedEvent = true
+		End If
+	End If
+
+	If DO_EVENT = "y" And dval1 < TH_UTIL1 Then
+		ReceivedClrCount = ReceivedClrCount + 1
+		' Stops Var from Overflowing if continually alright
+		If ReceivedClrCount > 100 Then
+			ReceivedClrCount = 99
+		End If
+		ReceivedCount = 0
+		If ReceivedClrCount = CONSEC_TIME And ReceivedEvent = true Then
+			resmsg = "EXHT_Server = " & EXHT_Server
+			crlf$ = Chr$(13) + Chr$(10)
+			longmsg = " Number of mail received through IMC  is "  _
+					  & format$(dval1, "0.00") & "; >TH = " _
+					  & CStr(TH_UTIL1) 
+			If DO_NUMBERS = "y" Then
+				shortmsg = Machinenamestr & " RECEIVED NORMAL " & format$(dval1, "0.00")
+			Else
+				shortmsg = Machinenamestr & " RECEIVED NORMAL NULL"	
+			End If
+
+			If SEND_NORMAL = "y" Then
+				MSActions 40, shortmsg, AKPID, resmsg, longmsg
+			Else
+				If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+					MSActions 40, shortmsg, AKPID, resmsg, longmsg
+				End If
+			End If
+
+			ReceivedClrCount = 0 
+			ReceivedEvent = false
+		End If
+	End If
+
+
+	If DO_EVENT = "y" And dval2 > TH_UTIL2 Then
+		SentCount = SentCount + 1
+		SentClrCount = 0
+		If SentCount = CONSEC_TIME Then
+			resmsg = "EXHT_Server = " & EXHT_Server
+			crlf$ = Chr$(13) + Chr$(10)
+			longmsg = " Number of mail Sent through IMC  is "  _
+					  & format$(dval2, "0.00") & "; >TH = " _
+					  & CStr(TH_UTIL2) 
+			If DO_NUMBERS = "y" Then
+				shortmsg = Machinenamestr & " SENT EXCEEDED " & format$(dval2, "0.00")
+			Else
+				shortmsg = Machinenamestr & " SENT EXCEEDED NULL"	
+			End If
+			MSActions SEVERITY, shortmsg, AKPID, resmsg, longmsg
+			SentCount = 0 
+			SentEvent = true
+		End If
+	End If
+
+	If DO_EVENT = "y" And dval2 < TH_UTIL2 Then
+		SentClrCount = SentClrCount + 1
+		' Stops Var from Overflowing if continually alright
+		If SentClrCount > 100 Then
+			SentClrCount = 99
+		End If
+		SentCount = 0
+		If SentClrCount = CONSEC_TIME And SentEvent = true Then
+			resmsg = "EXHT_Server = " & EXHT_Server
+			crlf$ = Chr$(13) + Chr$(10)
+			longmsg = " Number of mail Sent through IMC  is "  _
+					  & format$(dval2, "0.00") & "; >TH = " _
+					  & CStr(TH_UTIL2) 
+			If DO_NUMBERS = "y" Then
+				shortmsg = Machinenamestr & " SENT NORMAL " & format$(dval2, "0.00")
+			Else
+				shortmsg = Machinenamestr & " SENT NORMAL NULL"	
+			End If
+
+			If SEND_NORMAL = "y" Then
+				MSActions 40, shortmsg, AKPID, resmsg, longmsg
+			Else
+				If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+					MSActions 40, shortmsg, AKPID, resmsg, longmsg
+				End If
+			End If
+
+			SentClrCount = 0 
+			SentEvent = false
+		End If
+	End If
+
+	If DO_DATA = "y" Then
+		DataLog 1, dval1, "The number of mail received through IMC is " & Format$(dval1, "0") & " ."
+		DataLog 2, s1, "The size of mail received through IMC is " & Format$(s1, "0.00") & " KB."
+		DataLog 3, dval2, "The number of mail sent through IMC is " & Format$(dval2, "0") & " ."
+		DataLog 4, s2, "The size of mail sent through IMC is " & Format$(s2, "0.00") & " KB."
+	End If
+End Sub
+'### End KPS Section

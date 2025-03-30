@@ -1,0 +1,179 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exchange_AllPrivateResources.ebs
+'###
+'### Begin KP-Status Section
+'NeedKPW = 1				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1 
+'Description = Report details on ALL Private Folders
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = Daily
+'### End KPC Section
+
+'### Begin Type Section
+Const EXHT_Server = ""
+'### End Type Section
+
+'### Begin KPP Section
+' [V<Returns details on ALL Private folders. For this KS to function, the NT account used by NetiQmc must have mailbox and profile set up properly. You may EITHER enter their names here OR keep nulls and enter names via Security Console.>V]
+Const USER_SPECIFIED_DELIMITER = ""		'[M<Delimiter for Event Detail (null for TAB)>M] 
+Const USER_SPECIFIED_PROFILE   = ""		'[M<NetiQmc's Profile Name>M][T<String,160,';',>T]
+Const USER_SPECIFIED_MAILBOX   = ""		'[M<NetiQmc's Mailbox Name>M][T<String,160,';',>T]
+'### End KPP Section
+
+'### Begin KPS Section
+Const MAPI_E_LOGON_FAILED = 2147746065
+Const MAPI_E_CALL_FAILED  = 2147500037
+Const MAPI_ERROR          = 2147745792
+Const INVALID_VALUE	= 4294967295
+
+Const ALL_PRIVATE_RESOURCES = 0
+Const VERBOSE_DETAIL_LEVEL = 6
+
+Dim EXCH As Object
+
+Dim ResourceName As String
+Dim Profile As String
+Dim MailBox As String
+Dim ExchangeServer As String
+Dim SiteName As String
+Dim FullyQualifiedExchangeServerName As String
+Dim Delimiter As String
+
+Dim DetailLevel As Long
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+'/* Function ParseDataFile                                                          */
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+Function ParseDataFile(DataFileName As String) As Long
+
+	Dim ParmCount As Long
+	Dim LineCount As Long
+	Dim StreamID  As Long
+	Dim X         As Long
+
+	Dim DataPointValue As Double
+
+	Dim InputLine As String
+	Dim Parm As String
+
+	StreamID = Datediff("s","Jan 1, 1970",Now)
+
+	DataHeader "AllPrivateResources" , 0, StreamID
+
+	LineCount = 0
+
+    Open DataFileName For Input As #1
+
+   	While EOF(1) <> True
+		Line Input #1, InputLine
+
+		ParmCount = ItemCount(InputLine,Delimiter)
+
+		For X = 1 To ParmCount
+
+			Parm = Item$(InputLine,X,,Delimiter)
+			Parm = Trim$(Parm)
+
+			If Parm <> "" Then
+				DataPointValue = LineCount + ((X - 1) * 0.1)
+				DataLog StreamID, DataPointValue, Parm
+			End If
+				
+		Next X
+
+		LineCount = LineCount + 1
+
+	Wend
+	
+	Close #1
+
+End Function
+
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+'/* Sub Main                                                                        */
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+Sub Main()
+	Dim DLLVersion As String
+	Dim AgentMessage As String
+	Dim ErrorMessage As String
+
+	Dim ReturnCode As Long
+
+	If IterationCount() = 1 Then
+
+		ResourceName = "EXHT_Server = " & EXHT_Server
+
+	 	DLLVersion = ""
+		MCVersion "qexcha.dll", DLLVersion
+
+		If DLLVersion < "2.0.270.0" Then
+			MCAbort ResourceName, "QExchA.DLL MUST be at version 2.0.270.0 or higher. Please contact NetIQ Tech Support"
+			GoTo EndOfScript
+		End If
+
+		Set EXCH = CreateObject("NetiQAgent.Exch")
+
+		Profile = USER_SPECIFIED_PROFILE
+		Mailbox = USER_SPECIFIED_MAILBOX
+
+		If Profile = "" Or Mailbox = "" Then
+	 		ReturnCode = GetContext("exch", "user", "netiq", "profile", Profile, "mailbox", MailBox)
+
+			If (ReturnCode = 0) Then
+	 			ErrorMessage = "No Exchange Profile/Mailbox in Security Console"
+				MCAbort ResourceName, ErrorMessage
+				GoTo EndOfScript
+	  		End If
+
+		End If
+
+		ExchangeServer = Right$(EXHT_Server, Len(EXHT_Server) - InStr(EXHT_Server, ":"))
+		ExchangeServer = Left$(ExchangeServer,  InStr(ExchangeServer, "(") - 1)
+		SiteName       = Right$(EXHT_Server, Len(EXHT_Server) - InStr(EXHT_Server, "("))
+		SiteName       = Left$(SiteName, InStr(SiteName, ")")-1 )
+		
+		FullyQualifiedExchangeServerName = SiteName & "/cn=Configuration/cn=Servers/cn=" & ExchangeServer
+
+		MailBox = SiteName & "/cn=Recipients/cn=" & MailBox
+
+		DetailLevel = VERBOSE_DETAIL_LEVEL
+
+		If USER_SPECIFIED_DELIMITER = "" Then
+			Delimiter = Chr$(9)
+		Else
+			Delimiter = USER_SPECIFIED_DELIMITER
+		End If
+
+   	End If
+
+
+	ReturnCode = EXCH.TopNMailBoxF (FullyQualifiedExchangeServerName, _
+                                    Profile,						   _
+                                    "", 							   _
+                                    MailBox, 						   _
+                                    ALL_PRIVATE_RESOURCES, 			   _
+                                    Delimiter, 					   _
+                                    DetailLevel, 					   _
+                                    AgentMessage, 					   _
+                                    ErrorMessage)
+
+	If ReturnCode < 0 Then
+		ErrorMessage = "Profile=" & Profile & "; " & "Mailbox=" & MailBox & "; " & ErrorMessage
+ 		MCAbort ResourceName, ErrorMessage
+		GoTo EndOfScript
+	End If
+
+	ReturnCode = ParseDataFile(AgentMessage)
+
+	Kill AgentMessage
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+EndOfScript:
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+End Sub
+'### End KPS Section

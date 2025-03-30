@@ -1,0 +1,159 @@
+'### Copyright (c) 1996-1999 NetIQ Corp. All rights reserved.
+'### 
+'### Exchange_NumberOfMailbox.ebs
+'###
+
+'$Revision: 13 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.361.8.13"
+Const KSVerID = "1.0"
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 1				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1 
+'Description = Monitors the number of mailboxes 
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = Daily
+'### End KPC Section
+
+'### Begin Type Section
+Const EXHT_Server = ""
+'### End Type Section
+
+'### Begin KPP Section
+' The type and range of each variable can be enforced as follows
+' [T<Integer, maxList, delim, minValue, maxValue, units>T]	maxList and delim are place holders
+' [T<String, maxChars, delim, legalChars>T]
+' [M<message text>M]
+'
+' [V<Monitors number of mailboxes. For this KS to function, the NT account used by NetiQmc must have mailbox and profile set up properly. You may EITHER enter their names here OR keep nulls and enter names via Security Manager.>V]
+Const DO_EVENT = "y"		'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"			'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const TH_UTIL = 300	    	'[M<# Mailboxes > >M] [T<Integer,,, 0, , #>T]
+Const PROFILE = ""			'[M<NetiQmc's Profile Name>M][T<String,160,';',>T]
+Const MAILBOX = ""			'[M<NetiQmc's Mailbox Name>M][T<String,160,';',>T]
+Const SEVERITY = 5			'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When the number of mailboxes exceeded the given threshold, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+
+'### End KPP Section
+
+'### Begin KPS Section
+Dim EXCH As Object			' Keep the reference count of this DLL
+Dim strMachname$
+Dim iCounter As Integer
+Dim strProfile$
+Dim lRetVal As Long
+Dim strExchServer$
+Dim strErrorMsg$
+Dim strMailBox$
+Dim strExchServerDN$
+Dim strSiteDN$
+Dim strAgtMsg$
+Dim strAgrMsg1$
+
+Function MyGetProgID (progid As String) As String
+	Dim version As String
+
+	MCVersion "netiqmc.exe", version
+	If version < "3.0" Then
+		MyGetProgID = progid
+	Else
+		MyGetProgID = MCGetMOID (progid,AppManID)
+	End If
+End Function
+
+
+Sub Main()
+	Dim strErrorMsg$, resmsg$, longmsg$, shortmsg$
+	Dim version As String  
+	Dim past As Long
+	Dim TotalNum As Long
+	Dim ActiveNum As Long
+	Dim InactiveNum As Long
+	Dim ss As Long
+
+ 	version = ""
+	MCVersion "qexcha.dll", version
+
+	progid = MyGetProgId  ("NetiQAgent.EXCH")
+	Set EXCH = CreateObject (progid)
+
+	iCounter =  IterationCount()
+ 	If iCounter = 1 Then
+		If PROFILE = "" Or	MAILBOX = "" Then
+			strProfile = ""
+			strMailBox = ""
+	 		dwVal = GetContext("exch", "user", "netiq", _
+						   "profile", strProfile, "mailbox", strMailBox)
+			If (dwVal = 0) Then
+	 			strErrorMsg = "No Profile/Mailbox" & "Profile=" & strProfile & ", Mailbox=" _
+					  & strMailBox & Chr$(13)
+				MCAbort "EXHT_Server = " & EXHT_Server, strErrorMsg
+				Exit Sub
+	  		End If
+		Else
+			strProfile = PROFILE
+			strMailbox = MAILBOX
+		End If
+
+		strExchServer = Right$(EXHT_Server, Len(EXHT_Server) - InStr(EXHT_Server, ":"))
+		strExchServer = Left$(strExchServer,  InStr(strExchServer, "(") - 1)
+		strSiteDN	  = Right$(EXHT_Server, Len(EXHT_Server) - InStr(EXHT_Server, "("))
+		strSiteDN 	  = Left$(strSiteDN, InStr(strSiteDN, ")")-1 )
+		strExchServerDN = strSiteDN & "/cn=Configuration/cn=Servers/cn=" & strExchServer
+
+		strMailBox = strSiteDN & "/cn=Recipients/cn=" & strMailBox
+
+		If DO_DATA = "y" Then
+   			DataHeader "Number of Mailboxs" , 0, 1
+ 		End If
+
+   	End If
+
+  	ss = EXCH.InactiveMailbox (strExchServerDN, strProfile, "", strMailBox, _
+								1, 0, TotalNum, ActiveNum, InactiveNum, strAgtMsg, lRetVal, strErrorMsg)
+	MCSleep 1000
+
+	If (ss = 0) Then
+		strAgtMsg1 = strAgtMsg & "1"
+		FileCopy strAgtMsg, strAgtMsg1
+		MCSleep 1000
+
+   		If DO_EVENT = "y" And TotalNum > TH_UTIL Then
+   			resmsg = "EXHT_Server = " & EXHT_Server
+   			shortmsg = 	"# Mailbox High"
+  			MSLongActions SEVERITY, shortmsg, AKPID, resmsg, strAgtMsg
+		Else
+			Kill strAgtMsg
+		End If
+
+   		If DO_DATA = "y" Then
+   			LongDataLog 1, TotalNum, strAgtMsg1
+		Else
+			Kill strAgtMsg1
+		End If
+	Else
+   		resmsg = "EXHT_Server = " & EXHT_Server
+ 		longmsg = "Profile=" & strProfile & "; " _
+				  & "Mailbox=" & strMailBox & "; " 
+	   	longmsg = longmsg & strErrorMsg
+ 		shortmsg = strErrorMsg
+' 		MCAbort resmsg, longmsg
+		If iCounter = 1 Then
+ 			MCAbort resmsg, longmsg
+		Else
+  			MSActions SEVERITY, "Exchange Services Down", "AKP_NULL", resmsg, longmsg
+		End If
+		Exit Sub
+	End If
+
+
+End Sub
+'### End KPS Section

@@ -1,0 +1,101 @@
+'### Copyright (c) 1996 NetiQ Corp. All rights reserved.
+'### 
+'### Exchange_ServerHealth.ks
+'###
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors Exchange Server Health
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = ThirtyM
+'### End KPC Section
+
+'### Begin Type Section
+'### drop target is machine
+Const EXHT_Server = ""
+'### End Type Section
+
+'### Begin KPP Section
+'[V<Monitors following values: % Total Processor Time; % Processor Time for each of DSAMAIN, EMSMTA, STORE, or MAD service; Total Memory Pages/sec.>V]
+Const DO_EVENT = "y"	'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"		'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const USE_DELTA = "n"	'[M<Use Delta? (y/n)>M] [T<String,1,,"yn">T]
+Const TOTCPU_OVER = 99	'[M<% Total Processor Time > >M] [T<Integer,,, -100, 100, # >T]
+Const CPU_OVER = 10		'[M<% CPU of each service > >M] [T<Integer,,, -100, 100, # >T]
+Const MEM_OVER = 200	'[M<Total Memory Pages/sec > >M] [T<Integer,,, -100000, 100000, # >T]
+Const Severity = 5		'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When any Threshold is exceeded, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Dim NT As Object
+Dim OBJ As Object
+Dim strDelta As String
+	
+Function GetCounterValue(ObjectName As String, CounterName As String, InstanceName As String, nDataID As Integer, TH_OVER As Integer, LastValue As Double) As Double
+	Dim dval As Double
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+
+	strDelta = ""
+	If IterationCount() = 1 And USE_DELTA = "y" Then
+		LastValue = OBJ.CounterValue(ObjectName, CounterName, InstanceName)
+		strDelta = "Delta "
+                Sleep(500)
+	End If
+	dval = OBJ.CounterValue(ObjectName, CounterName, InstanceName)
+	GetCounterValue = dval
+	If dval = -1 Then
+		resmsg = "EXHT_Server = " & EXHT_Server
+		longmsg = "Counter (\" & ObjectName & "\" & CounterName & "\" & InstanceName & ") value not available "
+		MCAbort resmsg, longmsg 
+	End If
+
+	If USE_DELTA = "y" Then
+		dval = dval - LastValue
+	End If
+	' Check threshold, and do action
+	If DO_EVENT = "y" Then
+		If dval > TH_OVER Then
+	   		resmsg = "EXHT_Server = " & EXHT_Server
+			shortmsg = 	CounterName & "=" & Format$(dval+0.001, "0.00") & "; >TH = " & Cstr(TH_OVER)	
+			longmsg = strDelta & "Counter value for \" & ObjectName & "\" & CounterName & "\" & InstanceName & " is " & _
+				Format$(dval, "0.00") & "; >TH = " & Cstr(TH_OVER)
+			MSActions Severity, strDelta & CounterName & " Above threshold", AKPID, resmsg, longmsg
+		End If
+
+  	End If
+
+	' Do graphing
+	If DO_DATA = "y" Then
+		If IterationCount() = 1 Then
+			DataHeader strDelta & OBJ.CounterLegend(ObjectName, CounterName, InstanceName) , 0, nDataID
+		End If
+		strDetail = Now() & ", " & strDelta & "Value=" & dval & ", Last value=" & LastValue
+		DataLog nDataID, dval, strDetail
+	End If
+
+End Function
+
+Private dSysProc As Double
+Private dDSAMAIN As Double
+Private dEMSMTA  As Double
+Private dSTORE   As Double
+Private dMAD     As Double
+Private dMem     As Double 
+Sub Main()
+	dSysProc = GetCounterValue ("System",  "% Total Processor Time", "",        0, TOTCPU_OVER, dSysProc)
+	dDSAMAIN = GetCounterValue ("Process", "% Processor Time",       "DSAMAIN", 1, CPU_OVER, dDSAMAIN)
+	dEMSMTA  = GetCounterValue ("Process", "% Processor Time",       "EMSMTA",  2, CPU_OVER, dEMSMTA)
+	dSTORE   = GetCounterValue ("Process", "% Processor Time",       "STORE",   3, CPU_OVER, dSTORE)
+	dMAD     = GetCounterValue ("Process", "% Processor Time",       "MAD",     4, CPU_OVER, dMAD)
+	dMem     = GetCounterValue ("Memory",  "Pages/sec",              "",        5, MEM_OVER, dMem)
+End Sub
+
+'### End KPS Section

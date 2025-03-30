@@ -1,0 +1,249 @@
+'### Copyright (c) 1998 Shell Services International. All rights reserved.
+'### 
+'### Exchange_SSINDRCount
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.361.8.2"
+Const KSVerID = "3.0"
+'Comment=  Changed to AppManager 3.0 Compliant
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1 
+'Description = Monitors the size of Information Store.
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+Const EXHT_Server = ""
+'### End Type Section
+
+'### Begin KPP Section
+' The type and range of each variable can be enforced as follows
+' [T<Integer, maxList, delim, minValue, maxValue, units>T]	maxList and delim are place holders
+' [T<String, maxChars, delim, legalChars>T]
+' [M<message text>M]
+'
+' [V<CPReady.Gathers NDR Information from the NT Event Log. (Version 3.0)>V]
+'### Author 		: Dayanand (713) 245-1556 (Property of Shell Services International)
+'### Version		: 1.0
+'### Description	: Gathers NDR from the NT Event Log into the QDB 
+
+'### Changed 		: Dayanand (713) 245-1556 (Property of Shell Services International)
+'### Revision		: 1.1
+'### Enhancement	: Increased the timeout for the event log reader to infinite. 
+
+'### Changed 		: Paul Curtis (Property of Shell Services International)
+'### Revision		: 3.0
+'### Enhancement	: Changed to AppManager 3
+
+Const DO_DATA = "y"			'[M<Collect NDR Data? (y/n)>M] [T<String,1,,"yn">T]
+Const EVENTID = "257,4156"	' [M<List all event IDs to track, separated by comma w/ no space>M] [T<String,10000,',',>T] 
+Const PATH = "C:\Event Log Reader.exe" '[M<Path to Event Log Reader>M] [T<string,1000,',',>T]
+
+'[A<When the threshold is exceeded by an IS, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+
+'### End KPP Section
+
+'### Begin KPS Section				   
+
+Declare Function OpenProcess Lib "kernel32" (ByVal dwDesiredAccess As Long, ByVal bInheritHandle As Long, ByVal dwProcessId As Long) As Long
+Declare Function CloseHandle Lib "kernel32" (ByVal hObject As Long) As Long
+Declare Function WaitForSingleObject Lib "kernel32" (ByVal hHandle As Long, ByVal dwMilliseconds As Long) As Long
+
+
+Const STILL_ACTIVE = &H103
+Const PROCESS_QUERY_INFORMATION = &H400
+Const SYNCHRONIZE = &H100000
+
+Const WAIT_FAILED = -1&        'Error on call
+Const WAIT_OBJECT_0 = 0        'Normal completion
+Const WAIT_ABANDONED = &H80&   '
+Const WAIT_TIMEOUT = &H102&    'Timeout period elapsed
+Const IGNORE = 0               'Ignore signal
+Const INFINITE = &HFFFF      
+
+Const SW_HIDE = 0
+Const SW_SHOWNORMAL = 1
+Const SW_SHOWMINIMIZED = 2
+Const SW_SHOWMAXIMIZED = 3
+Const SW_SHOWNOACTIVATE = 4
+Const SW_SHOW = 5
+Const SW_MINIMIZE = 6
+Const SW_SHOWMINNOACTIVE = 7
+Const SW_SHOWNA = 8
+Const SW_RESTORE = 9
+
+Const WM_CLOSE = &H10
+Const GW_HWNDNEXT = 2
+Const GW_OWNER = 4
+
+'***************************************************************
+'	Function FileExists
+'		Description	: FileExists - Returns true if file exists,
+'					  else returns false 
+'		Parameter 	: sPathName - Path to the file to check.
+'
+'***************************************************************
+Function FileExists(ByVal sPathName As String) As Boolean
+    Dim intFileNum As Integer
+    Const sSEP_DIR As String = "\"
+    
+    On Error Resume Next
+    '
+    'Remove any trailing directory separator character
+    '
+    If Right$(sPathName, 1) = sSEP_DIR Then
+        sPathName = Left$(sPathName, Len(sPathName) - 1)
+    End If
+
+    '
+    'Attempt to open the file, return value of this function is False
+    'if an error occurs on open, True otherwise
+    '
+    intFileNum = FreeFile
+    Open sPathName For Input As intFileNum
+    FileExists = IIf(Err, False, True)
+    Close intFileNum
+    Err = 0
+End Function
+
+'************************************************************************************
+'	Function ShellAndWait
+'		Description	: Returns the state of the process executed by it. Waites 
+'					  until the process completes.
+'		Parameter 1	: sPath - Path to the file to execute.
+'		Parameter 2	: ExecMode - The mode in which the process was run.
+'					  Maximized/Minimized/Normal etc.
+'
+'************************************************************************************
+Function ShellAndWait(ByVal sPath As String, ExecMode As Long) As Long
+
+   Dim ProcessID As Long
+   Dim hProcess As Long
+   Dim nRet As Long
+   Const fdwAccess = SYNCHRONIZE
+      
+   On Error Resume Next
+   ProcessID = Shell(sPath, ExecMode)
+            
+   hProcess = OpenProcess(fdwAccess, False, ProcessID)
+   nRet = WaitForSingleObject(hProcess, INFINITE)
+   nRet = CloseHandle(hProcess)
+   
+   ShellAndWait = nRet
+
+End Function
+
+'************************************************************************************
+'	Function WasDirty
+'		Description	: Returns true if the file is dirty, else return false 
+'		Parameter 1	: sFilname - Path to the file to check
+'
+'************************************************************************************
+Function WasDirty(sFilname As String) As Boolean
+
+	Dim nFreeFile As Long
+	Dim sTmp As String
+	
+	WasDirty = False
+	nFreeFile = FreeFile
+	Open sFilname For Input As #nFreeFile
+	Do While Not EOF(nFreeFile)
+		Line Input #nFreeFile, sTmp
+		If sTmp <> "" Then
+			WasDirty = True
+			Close #nFreeFile
+			Exit Function
+		End If
+	Loop
+	Close #nFreeFile
+
+End Function
+
+
+Dim Files() As String
+Dim HaveHeader() As Boolean
+
+Sub Main()
+
+	Dim LongMsg As String
+	Dim NumEvents As Integer
+	Dim I As Integer
+	Dim lRetVal As Long
+	Dim nFreeFile As Long
+	Dim nLen As Long
+	Dim sTmp As String
+
+	'*****************************************
+	' Build file list
+	'*****************************************
+		 	
+	NumEvents = ItemCount(EVENTID, ",")
+	ReDim Preserve Files(NumEvents)
+	ReDim Preserve HaveHeader(NumEvents)
+	For I = 1 To NumEvents
+		If IterationCount() = 1 Then 
+			Files(I) = "Local_" & Item$(EVENTID, I,, ",") & ".txt"
+			HaveHeader(I) = False
+		End If
+	Next I		
+
+
+	If DO_DATA = "y" Then
+
+		'*****************************************
+		' Call event log reader
+		'*****************************************
+		If FileExists(PATH) Then
+			sTmp = PATH & " /WC: /E" & Chr(34) & EVENTID & Chr(34)
+			lRetVal	= ShellAndWait(sTmp, 1)
+		Else
+			MCAbort "EXHT_Server = " & EXHT_Server, "The file " & PATH & " is not found. Cannot run this KS."
+		End If
+	End If
+
+	'*****************************************
+	' Enter values into QDB
+	'*****************************************
+	If DO_DATA = "y" Then
+		
+		For I = 1 To NumEvents
+			If FileExists("C:\" & Files(I)) Then
+				If WasDirty("C:\" & Files(I)) And Not HaveHeader(I) Then 
+					HaveHeader(I) = True
+					DataHeader "Event ID " & Item$(EVENTID, I,, ","), 0, Clng(Item$(EVENTID, I,, ",")) 
+				End If
+				nFreeFile = FreeFile
+				Open "C:\" & Files(I) For Input As #nFreeFile
+				Do While Not EOF(nFreeFile)
+					Line Input #nFreeFile, sTmp
+					If sTmp <> "" Then
+						nLen = Len(sTmp)
+						If nLen <= 255 Then
+							nLen = 255 - nLen + 1
+							sTmp = sTmp & String(nlen, " ")
+						End If
+						LongMsg = sTmp
+						DataLog Clng(Item$(EVENTID, I,, ",")), Clng(Item$(EVENTID, I,, ",")), longmsg
+					End If
+				Loop
+				Close #nFreeFile
+				Kill "C:\" & Files(I)
+			End If
+ 		Next I
+	
+	End If
+
+End Sub
+
+'### End KPS Section

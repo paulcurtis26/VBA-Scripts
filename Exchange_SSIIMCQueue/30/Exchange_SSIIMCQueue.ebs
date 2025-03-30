@@ -1,0 +1,352 @@
+'### Copyright (c) Shell Service International
+'### 
+'### Exchange_SSIIMCQueue.ks
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.361.8.2"
+Const KSVerID = "3.0"
+'Comment=  Changed to Command Post 3.0 Syntax
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors Exchange Server IMC Queues
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+'### drop target is machine
+Const EXHT_IMCQueue = ""
+'### End Type Section
+
+'### Begin KPP Section
+'### Author 		: PAul Curtis
+'### Version		: 1.0
+'### Description	: Check each Message Queue
+
+'### Changed by		: Paul Curtis (171) 257-7373 (Property of Shell Services International)
+'### Date			: 16/6/99
+'### Revision       : 1.2
+'### Enhancements 	: -Added Code to alway send auto clear if Action is Command Post
+
+'### Changed by		: Paul Curtis (171) 257-7373 (Property of Shell Services International)
+'### Date			: 19/8/99
+'### Revision       : 3.0
+'### Enhancements 	: -Command Post 3 Syntax
+
+'[V<CPReady.Monitors Exchange Server IMC Queues: Queued Inbound, Queued MTS-IN, Queued MTS-OUT, Queued Outbound.(Version 3.0)>V]
+Const DO_EVENT = "y"	'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"		'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_NUMBERS = "n"		'[M<Send Numeric Data with Events? (y/n)>M] [T<String,1,,"yn">T]
+Const QINBOUND_OVER = 10	'[M<Queued Inbound Messages > >M] [T<Integer,,, 0, 9999, # >T]
+Const QIN_CONSEC_TIMES = 1	'[M<(Inbound Messages) Number of occurences before event is fired > >M] [T<Integer,,, 0, 9999, # >T]
+Const QIN_SEV = 5			'[M<(Inbound) Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+Const QMTSIN_OVER = 10		'[M<Queued MTS-IN Messages > >M] [T<Integer,,, 0, 9999, # >T]
+Const QMTSIN_CONSEC_TIMES = 1	'[M<(MTS-IN Messages) Number of occurences before event is fired > >M] [T<Integer,,, 0, 9999, # >T]
+Const QMTSIN_SEV = 5			'[M<(MTS-IN) Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+Const QMTSOUT_OVER = 10		'[M<Queued MTS-OUT Messages > >M] [T<Integer,,, 0, 9999, # >T]
+Const QMTSOUT_CONSEC_TIMES = 1	'[M<(MTS-OUT Messages) Number of occurences before event is fired > >M] [T<Integer,,, 0, 9999, # >T]
+Const QMTSOUT_SEV = 5			'[M<(MTS-OUT) Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+Const QOUTBOUND_OVER = 10	'[M<Queued Outbound Messages > >M] [T<Integer,,, 0, 9999, # >T]
+Const QOUTBOUND_CONSEC_TIMES = 1	'[M<(Outbound Messages) Number of occurences before event is fired > >M] [T<Integer,,, 0, 9999, # >T]
+Const QOUTBOUND_SEV = 5			'[M<(Outbound) Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Sev_Normal = 40			'[M<Event Severity - Normal>M] [T<Integer,,,1, 40, SevLevel>T]
+Const DO_DEBUG = "n"	'[M<Write Debug Info? (y/n)>M] [T<String,1,,"yn">T]
+Const SEND_NORMAL = "y"			'[M<Send Mesage When IMC Queue is Normal (AutoClear Message) ? (y/n)>M] [T<String,1,,"yn">T]
+
+'[A<When the Threshold is exceeded, the selected action is taken. >A]
+Const AKPID = "AKP_NULL"	' [M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+'### Changed by		: Paul Curtis (171) 257-7373 (Property of Shell Services International)
+'### Date			: 20/7/99
+'### Revision       : 3.0
+'### Enhancements 	: -Changed to Command Post 3.0 Syntax
+'### 				: -Added SEND_NORMAL
+
+Option Base 1
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Dim NT As Object
+Dim OBJ As Object
+Dim Machinenamestr As String
+
+Type QUEUE_STRUCT
+	QUEUEName As String 			'Stores Name of Queues.
+	MessageThres As Double			'Threshold for the Number of messages
+	MessageCurrent As Double		'Stores Number of Current Messages
+	Severity As Integer				'Stores Severity for Queue
+	ThresCount As Double			'Stores threshold for Messages
+	EventThres As Double		'Count for amount of times a threshold Has be broken consecutively before an event is fired.
+	EventFired As Boolean			'Stores whether an event has been fired, this is set to "False" initially, this stops the script 
+									'      from sending a "Normal" mesaage when it first starts up (This causes Command post To be out of sync)
+End Type
+
+Dim QueueArray(4) As QUEUE_STRUCT		'An Array of Disks
+Const KSName ="Exchange_SSIIMCQueue"
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+	
+
+'This function is required to replace characters in a string with a different Character.
+'In this Script this function is used to replace spaces , " " , with hyphen's ,"-"
+Function AlterString(sString As String, sCharToReplace As String, sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+
+
+Sub Main()
+
+Set NT = CreateObject("NetiQAgent.NT")
+Set OBJ = NT.System
+
+
+If DO_DEBUG  = "y" Then
+	createret = createdebugdir	'Use Function to Create Directory if its not already there
+	If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+		If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+			If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+				kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+			End If
+			Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+		End If
+	End If
+
+	Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+End If
+
+If iterationcount() = 1 Then
+    Dim NameSize As Long
+   	Dim X As Long
+	Dim Machinename1 As String
+
+	Dim y As Integer
+    MachineName1 = Space$(16)
+   	NameSize = Len(MachineName1)
+	X = GetComputerName(Machinename1,NameSize)
+	For y = 1 To Len(Machinename1)
+		If ASC(Mid(Machinename1,y,1)) <> 0 Then
+			Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+		End If
+	Next y
+	Machinenamestr = lcase(trim(Machinenamestr))
+
+'Setup Array for Inbound Queue
+	QueueArray(1).QUEUEName="Queued Inbound"
+	QueueArray(1).MessageThres=QINBOUND_OVER
+	QueueArray(1).MessageCurrent=0
+	QueueArray(1).Severity=QIN_SEV
+	QueueArray(1).ThresCount=0
+	QueueArray(1).EventThres=QIN_CONSEC_TIMES
+	QueueArray(1).EventFired=false
+
+	QueueArray(2).QUEUEName="Queued MTS-IN"
+	QueueArray(2).MessageThres=QMTSIN_OVER
+	QueueArray(2).MessageCurrent=0
+	QueueArray(2).Severity=QMTSIN_SEV
+	QueueArray(2).ThresCount=0
+	QueueArray(2).EventThres=QMTSIN_CONSEC_TIMES
+	QueueArray(2).EventFired=false
+		
+	QueueArray(3).QUEUEName="Queued MTS-OUT"
+	QueueArray(3).MessageThres=QMTSOUT_OVER
+	QueueArray(3).MessageCurrent=0
+	QueueArray(3).Severity=QMTSOUT_SEV
+	QueueArray(3).ThresCount=0
+	QueueArray(3).EventThres=QMTSOUT_CONSEC_TIMES
+	QueueArray(3).EventFired=false
+
+	QueueArray(4).QUEUEName="Queued Outbound"
+	QueueArray(4).MessageThres=QOUTBOUND_OVER
+	QueueArray(4).MessageCurrent=0
+	QueueArray(4).Severity=QOUTBOUND_SEV
+	QueueArray(4).ThresCount=0
+	QueueArray(4).EventThres=QOUTBOUND_CONSEC_TIMES
+	QueueArray(4).EventFired=false
+
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " &  "*****************************************************************"
+		Print #2 , Now() & "        " &  "Objects To Monitor"
+		For QueueNum=1 To 4
+			Print #2 , Now() & "        " &	"Queue Name				:" & QueueArray(QueueNum).QUEUEName
+			Print #2 , Now() & "        " &	"Message Threshold		:" & QueueArray(QueueNum).MessageThres
+			Print #2 , Now() & "        " &	"Current Messages		:" & QueueArray(QueueNum).MessageCurrent
+			Print #2 , Now() & "        " &	"Queue Severity			:" & QueueArray(QueueNum).Severity
+			Print #2 , Now() & "        " &	"Event Count			:" & QueueArray(QueueNum).ThresCount
+			Print #2 , Now() & "        " &	"Event Threshold		:" & QueueArray(QueueNum).EventThres
+			Print #2 , Now() & "        " &	"Event Fired			:" & QueueArray(QueueNum).EventFired
+		Next QueueNum
+	End If
+
+
+End If
+
+
+
+For QueueNum=1 To 4
+
+	QueueArray(QueueNum).MessageCurrent = OBJ.CounterValue("MSExchangeIMC", QueueArray(QueueNum).QUEUEName, "MSExchangeIMC")
+
+	If QueueArray(QueueNum).MessageCurrent = -1 Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        "
+			Print #2 , Now() & "        " &	"Service : " & QueueArray(QueueNum).QUEUEName & " Not Running"
+		End If
+		resmsg = "EXHT_IMCQueue = " & EXHT_IMCQueue
+		longmsg = QueueArray(QueueNum).QUEUEName & " service is not running "
+		shortmsg = Machinenamestr & " " & AlterString(QueueArray(QueueNum).QUEUEName," ","-") & " FAILED NULL"
+		MSActions QueueArray(QueueNum).Severity, shortmsg, AKPID, resmsg, longmsg
+		Err.Description = shortmsg
+		Err.raise 4103	' no such counter, terminate
+	End If
+
+
+	If DO_EVENT = "y" Then
+
+		If QueueArray(QueueNum).MessageCurrent > QueueArray(QueueNum).MessageThres Then
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        "
+				Print #2 , Now() & "        " &	"Current Message Queue Length for Queue : " & QueueArray(QueueNum).QUEUEName & " = " & QueueArray(QueueNum).MessageCurrent
+			End If
+
+			QueueArray(QueueNum).ThresCount = QueueArray(QueueNum).ThresCount + 1
+
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        "
+				Print #2 , Now() & "        " &	"	Number of times Queue Length has Exceeded Threshold : " & QueueArray(QueueNum).ThresCount
+			End If
+
+			If QueueArray(QueueNum).ThresCount > QueueArray(QueueNum).EventThres Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " &	"	The threshold for the event to be fired has been reached "
+				End If
+
+		 		resmsg = "EXHT_IMCQueue = " & EXHT_IMCQueue
+				longmsg = "Counter value for " & QueueArray(QueueNum).QUEUEName & " is " & _
+					Format$(QueueArray(QueueNum).MessageCurrent, "0.00") & "; >TH = " & Cstr(QueueArray(QueueNum).MessageThres) & _
+					" This has Occurred " & QueueArray(QueueNum).ThresCount & " Time(s)"
+			
+				If DO_NUMBERS = "y" Then
+					shortmsg = Machinenamestr & " " & AlterString(QueueArray(QueueNum).QUEUEName," ","-") & " EXCEEDED " & Format$(QueueArray(QueueNum).MessageCurrent, "0.00")
+				Else
+					shortmsg = Machinenamestr & " " & AlterString(QueueArray(QueueNum).QUEUEName," ","-") & " EXCEEDED NULL"
+				End If
+
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " &	"	Send Event : " & shortmsg
+				End If
+			
+				MSActions QueueArray(QueueNum).Severity, shortmsg, AKPID, resmsg, longmsg
+				QueueArray(QueueNum).EventFired=true
+				QueueArray(QueueNum).ThresCount=0
+		
+			End If			
+		
+		Else
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " &	"	Message Queue Length is below Threshold for Queue : " & QueueArray(QueueNum).QUEUEName
+			End If
+
+			QueueArray(QueueNum).ThresCount = 0
+			If QueueArray(QueueNum).EventFired=true Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " &	"	Event has been previously fired, so Auto clear message needs to be sent"
+				End If
+
+		 		resmsg = "EXHT_IMCQueue = " & EXHT_IMCQueue
+				longmsg = "Counter value for " & QueueArray(QueueNum).QUEUEName & " is " & _
+					Format$(QueueArray(QueueNum).MessageCurrent, "0.00") & "; < TH = " & Cstr(QueueArray(QueueNum).MessageThres) & _
+					" This has returned below Threshold"
+
+				If DO_NUMBERS = "y" Then
+					shortmsg = Machinenamestr & " " & AlterString(QueueArray(QueueNum).QUEUEName," ","-") & " NORMAL " & Format$(QueueArray(QueueNum).MessageCurrent, "0.00")
+				Else
+					shortmsg = Machinenamestr & " " & AlterString(QueueArray(QueueNum).QUEUEName," ","-") & " NORMAL NULL"
+				End If
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " &	"	Event Sent : " & shortmsg
+				End If
+			
+				If SEND_NORMAL = "y" Then
+					If DO_DEBUG  = "y" Then  
+						Print #2, now() & "       " & "Send Auto Clear"	
+					End If
+					MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+				Else
+					If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+						MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+						If DO_DEBUG  = "y" Then 
+							Print #2, now() & "       " & "Action is Command Post so send Auto Clear anyway"	
+						End If
+					Else
+						If DO_DEBUG  = "y" Then  
+							Print #2, now() & "       " & "Do Not Send Auto Clear"	
+						End If
+					End If
+				End If
+
+
+				QueueArray(QueueNum).EventFired=false
+			End If			
+	
+		End If
+	End If
+		' Do graphing
+	If DO_DATA = "y" Then
+
+		If IterationCount() = 1 Then
+			DataHeader "Message Queue " & QueueArray(QueueNum).QUEUEName & ":Messages", 0, QueueNum
+		End If
+  		DataLog QueueNum, QueueArray(QueueNum).MessageCurrent, ""
+	End If
+
+Next QueueNum
+
+If DO_DEBUG="y" Then
+	Close #2
+End If
+
+End Sub
+
+'### End KPS Section
