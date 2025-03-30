@@ -1,0 +1,369 @@
+'### Copyright (c) 1998 Shell Services International. All rights reserved.
+'### 
+'### NT_SSIHotFix.ebs
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.361.8.2"
+Const KSVerID = "3.0"
+'Comment=  Changed to Command Post 3.0 Syntax
+'### End KP-Version Section
+
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1 
+'Description = Collects information from the registry about HotFixes Ver 1.0
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = OneTime
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""
+'### End Type Section
+
+
+'### Begin KPP Section
+
+'### Author 		: Paul Flaherty  +44(0)171 257 4287 (Property of Shell Services International)
+'### Version 		: 1.0
+'### Description	: Collects information from the registry about HotFixes
+'### Date			: 17th May 1999
+
+'### Changed by		: Paul Curtis (171) 257-7373 (Property of Shell Services International)
+'### Date			: 28/7/99
+'### Revision       : 3.0
+'### Enhancements 	: -Changed to App Manager 3.0 Syntax
+
+' The type and range of each variable can be enforced as follows
+' [T<Integer, maxList, delim, minValue, maxValue, units>T]	maxList and delim are place holders
+' [T<String, maxChars, delim, legalChars>T]
+' [M<message text>M]
+'
+' [V<Collects information from the registry about HotFixes. Ver 3.0>V]
+Const DO_DEBUG = "n"		'[M<Write Debug Information to File? (y/n)>M] [T<String,1,,"yn">T]
+
+'### End KPP Section
+
+'### Begin KPS Section
+
+Const REG_SZ As Long = 1
+Const REG_DWORD As Long = 4
+ 
+Const HKEY_CLASSES_ROOT = &H80000000
+Const HKEY_CURRENT_USER = &H80000001
+Const HKEY_LOCAL_MACHINE = &H80000002
+Const HKEY_USERS = &H80000003
+ 
+Const ERROR_NONE = 0
+Const ERROR_BADDB = 1
+Const ERROR_BADKEY = 2
+Const ERROR_CANTOPEN = 3
+Const ERROR_CANTREAD = 4
+Const ERROR_CANTWRITE = 5
+Const ERROR_OUTOFMEMORY = 6
+Const ERROR_INVALID_PARAMETER = 7
+Const ERROR_ACCESS_DENIED = 8
+Const ERROR_INVALID_PARAMETERS = 87
+Const ERROR_NO_MORE_ITEMS = 259
+Const MAX_PATH = 260
+ 
+Const KEY_ALL_ACCESS = &H3F
+ 
+Const REG_OPTION_NON_VOLATILE = 0
+
+'Create a variable type for the array that will capture service information with xnet.exe
+Type xHotFixList
+	Name As String
+	BackupDIR As String
+	Desc As String
+	InstallBY As String
+	InstallWHEN As String
+	Valid As String
+End Type
+
+Declare Function RegOpenKey Lib "advapi32.dll" Alias "RegOpenKeyA" _ 
+	(ByVal hKey As Long,_ 
+	ByVal lpSubKey As String,_ 
+	phkResult As Long) As Long
+
+Declare Function RegCloseKey Lib "advapi32.dll" _
+	(ByVal hKey As Long) As Long
+
+Declare Function RegCreateKeyEx Lib "advapi32.dll" Alias "RegCreateKeyExA" _ 
+	(ByVal hKey As Long,_ 
+	 ByVal lpSubKey As String, _
+	ByVal Reserved As Long, _ 
+	ByVal lpClass As String,_ 
+	ByVal dwOptions As Long,_ 
+	ByVal samDesired As Long,_ 
+	ByVal lpSecurityAttributes As Long,_ 
+	phkResult As Long,_ 
+	lpdwDisposition As Long) As Long
+
+Declare Function RegOpenKeyEx Lib "advapi32.dll" Alias "RegOpenKeyExA" _ 
+	(ByVal hKey As Long,_ 
+	ByVal lpSubKey As String, _
+	ByVal ulOptions As Long,_ 
+	ByVal samDesired As Long,_ 
+	phkResult As Long) As Long
+
+Declare Function RegQueryValueExString Lib "advapi32.dll" Alias "RegQueryValueExA"_ 
+	(ByVal hKey As Long,_ 
+	ByVal lpValueName As String,_ 
+	ByVal lpReserved As Long,_ 
+	lpType As Long,_ 
+	ByVal lpData As String,_ 
+	lpcbData As Long) As Long
+
+Declare Function RegQueryValueExLong Lib "advapi32.dll" Alias "RegQueryValueExA"_ 
+	(ByVal hKey As Long,_ 
+	ByVal lpValueName As String,_ 
+	ByVal lpReserved As Long,_ 
+	lpType As Long,_ 
+	lpData As Long,_ 
+	lpcbData As Long) As Long
+
+Declare Function RegQueryValueExNULL Lib "advapi32.dll" Alias "RegQueryValueExA" _ 
+	(ByVal hKey As Long,_ 
+	ByVal lpValueName As String,_ 
+	ByVal lpReserved As Long,_ 
+	lpType As Long,_ 
+	ByVal lpData As Long,_ 
+	lpcbData As Long) As Long
+
+Declare Function RegSetValueExString Lib "advapi32.dll" Alias "RegSetValueExA"_
+	(ByVal hKey As Long,_ 
+	ByVal lpValueName As String, _
+	ByVal Reserved As Long,_ 
+	ByVal dwType As Long,_ 
+	ByVal lpValue As String, _ 
+	ByVal cbData As Long) As Long
+
+Declare Function RegSetValueExLong Lib "advapi32.dll" Alias "RegSetValueExA" _ 
+	(ByVal hKey As Long,_ 
+	ByVal lpValueName As String, _
+	ByVal Reserved As Long,_ 
+	ByVal dwType As Long,_ 
+	lpValue As Long, _
+	ByVal cbData As Long) As Long
+
+Declare Function RegEnumKey Lib "advapi32.dll" Alias "RegEnumKeyA" _
+	(ByVal hKey As Long,_ 
+	ByVal dwIndex As Long,_ 
+	ByVal lpName As String, _
+	ByVal cbName As Long) As Long
+
+
+Function QueryValue(lPredefinedKey As Long, sKeyName As String, sValueName As String) As Variant   
+    Dim lRetVal As Long         'result of the API functions
+    Dim hKey As Long         	'handle of opened key
+    Dim vValue As Variant     	'setting of queried value
+    QueryValue = ""
+	lRetVal = RegOpenKeyEx(lPredefinedKey, sKeyName, 0, KEY_ALL_ACCESS, hKey)
+    lRetVal = QueryValueEx(hKey, sValueName, vValue)
+    If vValue <> "" Then 
+		'vValue =  Left$(vValue, Len(vValue) - 1)
+		QueryValue = vValue
+    End If
+    lRetVal = RegCloseKey (hKey)
+End Function
+
+Function QueryValueEx(lhKey As Long, szValueName As String, vValue As Variant) As Long
+    Dim cch As Long
+    Dim lrc As Long
+    Dim lType As Long
+    Dim lValue As Long
+    Dim sValue As String
+ 
+    On Error GoTo QueryValueExError
+ 
+    ' Determine the size and type of data to be read
+    lrc = RegQueryValueExNULL(lhKey, szValueName, 0&, lType, 0&, cch)
+
+
+    If lrc <> ERROR_NONE Then Error 5
+ 
+    Select Case lType
+        ' For strings
+        Case REG_SZ
+            sValue = String(cch, 0)
+			lrc = RegQueryValueExString(lhKey, szValueName, 0&, lType, sValue, cch)
+            If lrc = ERROR_NONE Then
+                vValue = Left$(sValue, cch)
+            Else
+                vValue = Empty
+            End If
+        ' For DWORDS
+        Case REG_DWORD 
+			lrc = RegQueryValueExLong(lhKey, szValueName, 0&, lType, lValue, cch)
+            If lrc = ERROR_NONE Then vValue = lValue
+        Case Else
+           'all other data types not supported
+            'lrc = -1
+            sValue = String(cch, 0)
+			lrc = RegQueryValueExString(lhKey, szValueName, 0&, lType, sValue, cch)
+            If lrc = ERROR_NONE Then
+                vValue = Left$(sValue, cch)
+            Else
+                vValue = Empty
+            End If
+    End Select 
+
+	If DO_DEBUG  = "y" Then	 Print #2, now() & "      " & "Func:QueryValueEx:[lrd:lType:vValue]" & lrc & ":" & lType & ":" & vValue
+QueryValueExExit:
+    QueryValueEx = lrc
+    Exit Function
+QueryValueExError:
+    Resume QueryValueExExit
+End Function
+
+Sub GetKeys(ByVal sInputKey As String, sPredefinedKey As String, sKeyPath As String)
+
+	Dim nPos As Integer
+
+	nPos =  instr(sInputKey, "\")
+	sPredefinedKey = left(sInputKey, nPos - 1)
+	sKeyPath = Right(sInputKey, Len(sInputKey) - nPos)
+
+End Sub
+
+Public Function ReadRegistryGetSubkey(ByVal Group As Long, ByVal Section As String, Idx As Long) As String
+	Dim lResult As Long, lKeyValue As Long, lDataTypeValue As Long, lValueLength As Long, sValue As String, td As Double
+	On Error Resume Next
+	lResult = RegOpenKey(Group, Section, lKeyValue)
+	sValue = Space$(2048)
+	lValueLength = Len(sValue)
+	lResult = RegEnumKey(lKeyValue, Idx, sValue, lValueLength)
+	If (lResult = 0) And (Err.Number = 0) Then
+	   sValue = Left$(sValue, InStr(sValue, Chr(0)) - 1)
+	Else
+	   sValue = "Not Found"
+	End If
+	lResult = RegCloseKey(lKeyValue)
+	ReadRegistryGetSubkey = sValue
+End Function
+
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+Sub Main()
+	Dim sRoot As String
+	Dim sKey As String
+	Dim LastArray As Integer
+	Dim lPreDefKey As Long
+	Dim vValue As Variant
+	Dim MyArrayCount As Long
+	Dim BatchFileName As String
+	Dim CRLF As String
+	Dim MyHotFix() As xHotFixList
+
+	KSName= "NT_SSIHotFix"
+	MyArray = 0
+
+	If DO_DEBUG  = "y" Then
+		createret = createdebugdir	'Use Function to Create Directory if its not already there
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+	End If
+
+	MyArrayCount = 0
+
+	CRLF = Chr$(13) & chr$(10)
+		
+	'And finally, lets get some information about the services
+
+	 Dim Res, NewLine, Text1 As String
+	 Dim Regi As Long
+
+	 Res = ReadRegistryGetSubkey(HKEY_LOCAL_MACHINE, "SOFTWARE\Microsoft\Windows NT\CurrentVersion\HOTFIX\", Regi)
+	 If DO_DEBUG  = "y" Then	 Print #2, now() & "      " & Res
+
+	 NewLine = ""
+	 Do Until Res = "Not Found"
+	   Res = ReadRegistryGetSubkey(HKEY_LOCAL_MACHINE, "SOFTWARE\Microsoft\Windows NT\CurrentVersion\HOTFIX\", Regi)
+	   ReDim Preserve MyHotFix(MyArrayCount)
+	   MyHotFix(MyArrayCount).Name = Res
+	   MyArrayCount = MyArrayCount + 1
+	   Regi = Regi + 1
+           If DO_DEBUG  = "y" Then	 Print #2, now() & "      " & STR(MyArrayCount) & ":" & Res
+	 Loop
+
+	'Go through the array and check to see if the services we want are available
+	'If so set a flag to true and get values out of the registry
+	For I = 0 To UBound(MyHotFix)
+		'Check to see of the HOTFIX has been installed
+		IsInstalled = False
+		lPreDefKey = HKEY_LOCAL_MACHINE
+		sKey = "SOFTWARE\Microsoft\Windows NT\CurrentVersion\HOTFIX\" & TRIM(MyHotFix(I).Name)
+		vValue = QueryValue(lPreDefKey, sKey, "Installed On")
+
+		If Len(TRIM(vValue)) >1 Then IsInstalled = TRUE
+		If DO_DEBUG  = "y" Then	 Print #2, now() & "      " & "IsInstalled:" & vValue & ":" & STR(LEN(TRIM(vValue)))
+
+		'If any of the above check out okay, do something
+		If IsInstalled  Then
+			If DO_DEBUG  = "y" Then	 Print #2, now() & "      " & "Hotfix...:" & TRIM(MyHotFix(I).Name)
+
+			MyArray = MyArray +1
+			DataHeader "HotFix:" & TRIM(MyHotFix(I).Name) & "-Backup DIR" , 0, MyArray
+			vValue = QueryValue(lPreDefKey, sKey, "Backup Dir")
+			DataLog	 MyArray, 1, vValue			
+			If DO_DEBUG  = "y" Then	 Print #2, now() & "      " & "Backup DIR:" & vValue
+
+			MyArray = MyArray +1
+			DataHeader "HotFix:" & TRIM(MyHotFix(I).Name) & "-Desc" , 0, MyArray
+			vValue = QueryValue(lPreDefKey, sKey, "Fix Description")
+			DataLog	 MyArray, 1, vValue			
+			If DO_DEBUG  = "y" Then	 Print #2, now() & "      " & "Description:" & vValue
+
+			MyArray = MyArray +1
+			DataHeader "HotFix:" & TRIM(MyHotFix(I).Name) & "-Installed By" , 0, MyArray
+			vValue = QueryValue(lPreDefKey, sKey, "Installed By")
+			DataLog	 MyArray, 1, vValue			
+			If DO_DEBUG  = "y" Then	 Print #2, now() & "      " & "Installed By:" & vValue
+
+			MyArray = MyArray +1
+			DataHeader "HotFix:" & TRIM(MyHotFix(I).Name) & "-Installed On" , 0, MyArray
+			vValue = QueryValue(lPreDefKey, sKey, "Installed On")
+			If Len(TRIM(vValue)) >0 Then
+				vDateValue = Dateadd("S", vValue, "1/1/70 00:00:00")
+			Else
+				vDateValue = vValue
+			End If
+			DataLog	 MyArray, 1, vDateValue			
+			If DO_DEBUG  = "y" Then	 Print #2, now() & "      " & "Installed on:" & vValue & "(" & vDateValue & ")"
+
+			MyArray = MyArray +1
+			DataHeader "HotFix:" & TRIM(MyHotFix(I).Name) & "-Valid" , 0, MyArray
+			vValue = QueryValue(lPreDefKey, sKey, "Valid")
+			DataLog	 MyArray, 1, vValue			
+			If DO_DEBUG  = "y" Then	 Print #2, now() & "      " & "Valid:" & vValue
+		End If
+	Next I
+
+
+If DO_DEBUG  = "y" Then			
+	Close #2
+End If
+End Sub
+'### End KPS Section

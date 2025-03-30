@@ -1,0 +1,412 @@
+'### Copyright (c) 1995, 1996, 1997 NetIQ Corp. All rights reserved.
+'### 
+'### NT_SSIServerOutage.ebs
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.361.8.2"
+Const KSVerID = "3.0"
+'Comment=  Changed to Command Post 3.0 Syntax
+
+
+'### Begin KP-Status Section
+'NeedKPW = 0
+'AdminOnly = 0
+'DisplayToolBar = 1
+'IAmDiscovery = 0
+'IAmAction = 0
+'Description = Monitor System Outages
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = TwoM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""
+'### End Type Section
+
+'### Begin KPP Section
+'[V<CPReady. Please note that the Data collected for Server Up/Down Time is accurate to +/- half the interval selected (5 min interval = Accuracty to +/- 2 Minutes 30 seconds (Ver 3.1))>V]  
+Const DO_EVENT = "y"		'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "y"			'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DEBUG = "y"			'[M<Write Debug File? (y/n)>M] [T<String,1,,"yn">T]
+Const SEV_REBOOT = 25		'[M<Event Severity - System Reboot>M] [T<Integer,,,1, 40, SevLevel>T]
+Const SEV_NOCOUNTER = 35	'[M<Event Severity - Cant Obtain Counter>M] [T<Integer,,,1, 40, SevLevel>T]
+Const SEV_FILE_ERROR = 5	'[M<Event Severity - Stat File Error>M] [T<Integer,,,1, 40, SevLevel>T]
+'[A<When an Event is raised, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Alert Action taken>M]
+
+'### End KPP Section
+
+
+'### Begin KPS Section
+'### 
+'### NT_SSIServerOutage.ebs
+'### 
+'### Property of Shell Services International
+'###
+'### Revision History
+'###
+'### 03 August, 1998 Version 1.01    
+'###				 J. Colby - SSI-ITS-Technology Consultancy & Projects
+'###				 Renamed from General_SSISystemReboot.ebs to NT_SSIServerOutage.ebs to clarify purpose of
+'### 				 script.  Also changed default to collect data points (DO_DATA=y) of elapsed up and
+'###				 down times each time a reboot occurs.
+'###
+'###
+'### 29 June, 1998	 Version 1.00
+'###		         J. Colby - SSI-ITS-Technology Consultancy & Projects
+'###				 Modified original General_SystemReboot script to send alert to CommandPost.
+'### 				 Also hardwired location of file used to track uptime to the Windows installation
+'###				 directory (from Win32 API GetWindowsDirectory() call).
+'###
+'### Keeps track of amount of time system has been up and calculates the duration
+'### of system downtime.  Sends a single alert to CommandPost when the system is
+'### rebooted with the downtime for system availability reporting.  Can also log
+'### data points with elapsed up and down times.
+'### 
+'### Changed by		: Paul Curtis (171) 257-7373 (Property of Shell Services International)
+'### Date			: 21/7/99
+'### Revision       : 3.0
+'### Enhancements 	: -Changed to Command Post 3.0 Syntax
+'### 
+'### Changed by		: Paul Curtis (171) 257-7373 (Property of Shell Services International)
+'### Date			: 14/12/99
+'### Revision       : 3.1
+'### Enhancements 	: -Changed KSName Variable to point to correct KS Name
+
+
+Declare Function GetWindowsDirectory Lib "kernel32" Alias "GetWindowsDirectoryA" (ByVal lpBuffer As String, ByVal nSize As Long) As Long
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+
+Dim NT As Object
+Dim OBJ As Object
+Dim ResourceName As String
+Private StatFileName As String
+Dim Machinenamestr As String
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+'/* Function: GetSystemUpTime()
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+Function GetSystemUpTime() As Long
+
+	Dim ReturnValue As Long
+	Dim ObjectName As String
+	Dim CounterName As String
+	Dim InstanceName As String
+	Dim Zero As Long
+	Dim BlankString As String
+
+	Dim DetailMessage As String
+
+	ObjectName = "System"
+	CounterName = "System Up Time"
+	InstanceName = ""
+	Zero = 0
+	BlankString = ""
+
+	ReturnValue = OBJ.CounterValueEx(ObjectName, _
+									 CounterName, _
+									 InstanceName, _
+									 BlankString, _
+									 Zero, _
+									 Zero)
+
+	If ReturnValue = -1 Then
+		If DO_EVENT = "y" Then
+			MSActions SEV_NOCOUNTER, Machinenamestr & " Script Error NULL", AKPID, ResourceName, "Unable to Retrieve System Up Time Counter"
+		End If
+	End If
+
+	GetSystemUpTime = ReturnValue
+
+End Function
+
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+'/* Function: CreateStatFile()
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+Function CreateStatFile() As Long
+
+	Dim SystemUpTimeValue As Long
+	Dim OutputLine As String
+
+	SystemUpTimeValue = GetSystemUpTime()
+
+	If SystemUpTimeValue = -1 Then
+		CreateStatFile = False
+		GoTo CreateStatFile_Exit
+	End If
+
+	Open StatFileName For Output As #1
+
+	OutputLine = Now & "#" & SystemUpTimeValue
+	Print #1,OutputLine
+	
+	Close #1
+
+	CreateStatFile = True
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+CreateStatFile_Exit:
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+End Function
+
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+'/* Function: ReadStatFile()
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+Function ReadStatFile(TimeStamp As Variant, SystemUpTime As Long) As Long
+
+	Dim InputLine As String
+	Dim TempString As String
+
+	If FileExists(StatFileName) <> True Then
+		If DO_EVENT = "y" Then
+			MSActions SEV_FILE_ERROR,Machinenamestr & " StatFile Error NULL", AKPID, ResourceName, "The StatFile does Not exist"
+		End If
+
+		ReadStatFile = False
+		GoTo ReadStatFile_Exit
+	End If
+
+	Open StatFileName For Input As #1
+
+	Line Input #1,InputLine
+
+	Close #1
+
+	If ItemCount(InputLine,"#") <> 2 Then
+		If DO_EVENT = "y" Then
+			MSActions SEV_FILE_ERROR, Machinenamestr & " StatFile Error NULL", AKPID, ResourceName, "The StatFile does does not contain 2 parms"
+		End If
+
+		ReadStatFile = False
+		GoTo ReadStatFile_Exit
+	End If
+
+	TempString = Item$(InputLine, 1, , "#")
+
+	If IsDate(TempString) <> True Then
+		If DO_EVENT = "y" Then
+			MSActions SEV_FILE_ERROR,  Machinenamestr & " StatFile Error NULL", AKPID, ResourceName, "The StatFile Timestamp is invalid"
+		End If
+
+		ReadStatFile = False
+		GoTo ReadStatFile_Exit
+	End If
+
+	TimeStamp = CDate(TempString)
+	
+	TempString = Item$(InputLine, 2, , "#")
+
+	If IsNumeric(TempString) <> True Then
+		If DO_EVENT = "y" Then
+			MSActions SEV_FILE_ERROR, Machinenamestr & " StatFile Error NULL", AKPID, ResourceName, "The StatFile SystemUpTime is Invalid"
+		End If
+
+		ReadStatFile = False
+		GoTo ReadStatFile_Exit
+	End If
+
+	SystemUpTime = CLng(TempString)
+
+	ReadStatFile = True
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ReadStatFile_Exit:
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+End Function
+
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+'/* Sub: Main
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+Sub Main()
+
+	Dim PreviousTimeStamp As Variant
+	Dim PreviousSystemUpTime As Long
+	Dim SystemUpTime As Long
+	Dim ServerRestartTime As Variant
+	Dim ReturnCode As Long
+	Dim ServerDownTimeInMinutes As Double
+	Dim ServerUpTimeInMinutes As Double
+	Dim DetailMessage As String
+	Dim AlertMessage As String
+	Dim SystemName As String
+	Dim WinDirectoryBuf As String
+	Dim lRet As Long
+	Dim KSName As String
+	KSName= "NT_SSIServerOutage"
+	If IterationCount() = 1 Then
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+	    MachineName1 = Space$(16)
+	    NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+		Machinenamestr = lcase(trim(Machinenamestr))
+		If DO_DEBUG  = "y" Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+			If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+				If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+					If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+						kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+					End If
+		
+					Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+						
+				End If
+			End If
+		End If
+	End If	
+	If DO_DEBUG  = "y" Then
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+	End If
+
+	If IterationCount() = 1 Then
+		If DO_DEBUG  = "y" Then			
+			Print #2, now() & "      " & "First Iteration"
+		End If
+		Set NT = CreateObject("NetiQAgent.NT")
+		Set OBJ = NT.System
+
+		ResourceName = ""
+		SystemName = GetMachName()
+
+		' Create the filename for the status file.  Note that we attempt to dynamically locate a
+		' system directory to create the file in rather than hardcode it, since some of our servers
+		' don't always have a C: drive (e.g., Citrix).
+
+		WinDirectoryBuf = Space(256)
+		lRet = GetWindowsDirectory(WinDirectoryBuf, 256)	
+		If (lRet <> 0) Then
+			StatFileName = Left$(WinDirectoryBuf, lRet) & "\NetiqSysUpTime.sta"
+		Else
+			StatFileName = "C:\Temp\NetiqSysUpTime.sta" ' default if no other choice
+		End If
+		If DO_DEBUG  = "y" Then			
+			Print #2, now() & "      " & "Status file location : " &  StatFileName
+		End If
+
+
+		If FileExists(StatFileName) <> True Then
+			ReturnCode = CreateStatFile()
+			If DO_DEBUG  = "y" Then			
+				Print #2, now() & "      " & "Status file Does Not already Exist"
+				Print #2, now() & "      " & "Creation function for Status File returned : " & ReturnCode
+			End If
+			GoTo EndOfScript
+		End If
+
+		ReturnCode = ReadStatFile(PreviousTimeStamp, PreviousSystemUpTime)
+		If DO_DEBUG  = "y" Then			
+			Print #2, now() & "      " & "Reading Status File returned : " & ReturnCode
+			Print #2, now() & "      " & "Values found in status file"
+			Print #2, now() & "      " & ".........PreviousTimeStamp : " & PreviousTimeStamp
+			Print #2, now() & "      " & ".........PreviousSystemUpTime : " & PreviousSystemUpTime
+		End If
+
+		If ReturnCode <> True Then
+			If DO_DEBUG  = "y" Then			
+				Print #2, now() & "      " & "Unable to get previous Time data, exiting script"
+			End If
+			GoTo EndOfScript
+		End If
+
+		SystemUpTime = GetSystemUpTime()
+		If DO_DEBUG  = "y" Then			
+			Print #2, now() & "      " & "Executing function GetSystemUpTime(), to get SystemUpTime"
+			Print #2, now() & "      " & "..........System Up time is " & SystemUpTime
+		End If
+
+		If SystemUpTime = - 1 Then
+			If DO_DEBUG  = "y" Then			
+				Print #2, now() & "      " & "Unable to get Current system up time data, exiting script"
+			End If
+			GoTo EndOfScript
+		End If
+
+		If SystemUpTime < PreviousSystemUpTime Then
+			If DO_DEBUG  = "y" Then			
+				Print #2, now() & "      " & "Current System Up time is less than Previous"
+				Print #2, now() & "      " & "     so the machine has been rebooted"
+			End If
+			ServerRestartTime = DateAdd("s",(SystemUpTime * -1),Now)
+			ServerUpTimeInMinutes = PreviousSystemUpTime \ 60
+			ServerDownTimeInMinutes = DateDiff("n",PreviousTimeStamp,ServerRestartTime)
+			ServerDownTimeInSeconds = DateDiff("s",PreviousTimeStamp,ServerRestartTime)
+			If DO_DEBUG  = "y" Then			
+				Print #2, now() & "      " & "Values that have been calculated so far"
+				Print #2, now() & "      " & "..........ServerRestartTime : " & ServerRestartTime
+				Print #2, now() & "      " & "..........ServerUpTimeInMinutes : " & ServerUpTimeInMinutes
+				Print #2, now() & "      " & "..........ServerDownTimeInMinutes : " & ServerDownTimeInMinutes
+				Print #2, now() & "      " & "..........ServerDownTimeInSeconds : " & ServerDownTimeInSeconds
+			End If
+
+			DetailMessage = ""
+			DetailMessage = DetailMessage & "A System Reboot has Occured." & Chr$(13) & Chr$(10)
+			DetailMessage = DetailMessage & "The Server was Restarted at " & ServerRestartTime
+
+			If DO_EVENT = "y" Then
+				If DO_DEBUG  = "y" Then			
+					Print #2, now() & "      " & "Sending Alert SERVER REBOOTED"
+				End If
+				AlertMessage = Machinenamestr & " SERVER REBOOTED " & ServerDownTimeInSeconds & "s"
+				MSActions SEV_REBOOT, AlertMessage, AKPID, ResourceName, DetailMessage
+			End If
+
+			If DO_DATA = "y" Then
+				DataHeader "Server Up Time^^Minutes", 0, 1
+			   	DataLog 1, ServerUpTimeInMinutes, "The Server was Restarted at " & ServerRestartTime
+				DataHeader "Server Down Time^^Minutes", 0, 2
+			   	DataLog 2, ServerDownTimeInMinutes, "The Server was Restarted at " & ServerRestartTime
+			End If
+
+		End If
+
+	End If
+
+	ReturnCode = CreateStatFile()
+	If DO_DEBUG  = "y" Then			
+		Print #2, now() & "      " & " Writing out current information to Stat File "
+		Print #2, now() & "      " & " Write returned : " &  ReturnCode
+		Close #2
+	End If
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+EndOfScript:
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+End Sub
+
+'### End KPS Section

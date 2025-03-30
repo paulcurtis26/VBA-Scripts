@@ -1,0 +1,81 @@
+'### Copyright (c) 1997 NetIQ Corp. All rights reserved.
+'### 
+'### NT_NTBASProcessDown
+'###
+'### This KS checks if user-selected precesses or applications (.EXE or .COM) are running.  Raise
+'### an event if not.
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'IamDiscovery = 0                       ' I am a discovery KS
+'Description = Find out if the user-specified processes are currently running
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""		'on Machine Folder
+'### End Type Section
+
+'### Begin KPP Section
+'[V<Find out if user-selected processes, e.g., clock or tcpsvcs, are currently running.  Raise an event if any is not running.
+
+
+Const Sev_NonRestart = 8 '[M<Severity - Process not set to restart>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Sev_SucessRestart = 8 '[M<Severity - Process successfully restarted>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Sev_FailRestart = 8 '[M<Severity - Process failed to restart>M] [T<Integer,,,1, 40, SevLevel>T]
+Const AUTO_RESTART = "n"		'[M<Auto Restart Processes? (y/n)>M] [T<String,1,,"yn">T]
+Const Times_ToRestart = 1 '[M<Times to try and Auto restart>M] [T<Integer,,,1, 40, Time(s)>T]
+Const Restart_Timer = 1 '[M<Seconds between Restart Atempts>M] [T<Integer,,,1, 40, Sec(s)>T]
+Const DO_DEBUG = "n"		'[M<Write Debug Info? (y/n)>M] [T<String,1,,"yn">T]
+
+'[A<When any specified process is not running, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Dim NT As Object
+Dim SYS As Object
+
+Sub Main()
+	Dim obj As String
+	Dim result As Double
+	Dim ServerResult As Double
+	Dim MaintainResult As Double
+	Dim Detailmsg As String
+
+	If Processes = "" Then
+		Err.Description = "no process specified."
+		Err.raise 4104
+	End If
+
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set SYS = NT.System
+
+	ServerResult = SYS.CounterValue("Process", "% Processor Time", "NTBASServer")
+	MaintainResult = SYS.CounterValue("Process", "% Processor Time", "NTBASMaintenance")
+	
+	If ServerResult = -1 And MaintainResult = -1 Then
+	
+	Dim cRequest As Integer
+	Dim aProcesses() As Long
+
+ 	cRequest = 96  
+     
+	While cGot < cRequest            
+		ReDim aProcesses(0 To (cRequest / 4) - 1) As Long            
+		f = EnumProcesses(aProcesses(0), cRequest, cGot)            
+		If f = 0 Then cGot = 10000000
+		cRequest = cRequest * 2     
+	Wend
+	
+
+
+End Sub
+
+'### End KPS Section
+

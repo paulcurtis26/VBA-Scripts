@@ -1,0 +1,371 @@
+'### 
+'### NT_SSICPULoaded
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.1.415.1.1"
+Const KSVerID = "3.1"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=12/21/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitors CPU Usage and alerts if threshold is exceeded
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = ThirtyM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""
+'### End Type Section
+
+'### Begin KPP Section
+'[V<CPReady, Monitor CPU usage, Monitoring of Total CPU usage only available with Windows 2000. (Version 3.1)>V]
+Const DO_EVENT = "y"	'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "y"		'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_NUMBERS = "y" 	'[M<Show numbers? (y/n)>M][T<string,1,' ',yn">T]
+Const ALL_CPU = "y" 	'[M<Monitor Total CPU Usage (W2K Only)? (y/n)>M][T<string,1,' ',yn">T]
+Const THRESHOLD1 = 1	'[M<Threshold Value for any CPU > >M] [T<Integer,,, 0, 100, % >T]
+Const THRESHOLD2 = 1	'[M<Threshold Value for Total CPU (W2K Only)> >M] [T<Integer,,, 0, 100, % >T]
+Const SEND_NORMAL = "y"	'[M<Send Mesage When CPU Load is Normal (AutoClear Message) ? (y/n)>M] [T<String,1,,"yn">T]
+Const CONSEC_TIME = 1	'[M<Consecutive times>M] [T<long,,,1, 999999, #>T]
+Const Sev_Exceeded = 5	'[M<Event Severity - Exceeded>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Sev_Normal = 40 	'[M<Event Severity - Normal>M] [T<Integer,,,1, 40, SevLevel>T]
+Const DEBUG = "n"	'[M<Write Debug Information to File? (y/n)>M] [T<String,1,,"yn">T]
+'[A<When the CPU Load Threshold is exceeded, the selected action is taken. >A]
+Const AKPID = "AKP_NULL"	' [M<Action taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Dim NT As Object
+Dim OBJ As Object
+Dim Machinenamestr As String
+'These store the info about each Counter to be monitored
+'THe value here should equal the amount of times the function GetCounterValue
+'is called from the main() Routine
+Dim ConTimesOver() As Integer	  
+Dim ConTimesUnder() As Integer
+Dim EventFired() As Boolean
+Dim CPUnumber As Integer
+Dim CPUcount As Integer
+Dim InstanceName As String
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+
+
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+Function AlterString(sString As String, sCharToReplace As String, sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+	
+Sub GetCounterValue(ObjectName As String, CounterName As String, InstanceName As String, nDataID As Integer, TH_OVER As Integer)
+	Dim dval As Double
+	Dim strdVal As String
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+	If DO_DEBUG = "y" Then 
+		Print #2, now() & "       " &  "						" & "Checking CPU(" & InstanceName & ")"
+	End If
+	dval = OBJ.CounterValue(ObjectName, CounterName, InstanceName)
+
+	If dval = -1 Then
+		If DO_DEBUG = "y" Then 
+			Print #2, now() & "       " &  "						" & "Error Retrieving CPU values"
+			Close #2
+		End If
+		resmsg = "NT_MachineFolder = " & NT_MachineFolder
+		longmsg = "Can't get value of " & ObjectName & " " & CounterName & " " & InstanceName
+		shortmsg = 	"Can't get value of " & CounterName
+		MCAbort resmsg, shortmsg
+	End If
+	strdVal = format$(dval,"0.00") & "%"
+	If DO_EVENT = "y" And dval > TH_OVER Then
+		If DO_DEBUG = "y" Then 
+			Print #2, now() & "       " &  "						" & "	Load is over Threshold"
+			Print #2, now() & "       " &  "						" & "		CPU Load Value 		: " & strdVal
+			Print #2, now() & "       " &  "						" & "		Threshold Value 	: " & Cstr(TH_OVER)
+		End If
+		ConTimesOver(nDataID) = ConTimesOver(nDataID) + 1
+		ConTimesUnder(nDataID)=0
+		If ConTimesOver(nDataID) = CONSEC_TIME Then
+			If DO_DEBUG = "y" Then 
+				Print #2, now() & "       " &  "						" & "	CPU Load has exceeded threshold"
+				Print #2, now() & "       " &  "						" & "		Required Consecutive times"
+				Print #2, now() & "       " &  "						" & "		Times Over 		: " & ConTimesOver(nDataID)
+				Print #2, now() & "       " &  "						" & "		Required Times 	: " & CONSEC_TIME
+			End If
+			resmsg = "NT_MachineFolder = " & NT_MachineFolder
+			longmsg = "CPU Load for CPU(" & InstanceName & ") is " & strdVal & ";" & chr$(10)
+			longmsg = longmsg & "Threshold for Processor Util is " & Cstr(TH_OVER) & "%" & chr$(10)
+			longmsg = longmsg & "This Processor has exceeded this threshold " & ConTimesOver(nDataID) & " Times" & chr$(10)
+			longmsg = longmsg & "Required Consecutive times before an event is fired is " & Cstr(CONSEC_TIME) & " Times"
+			If DO_NUMBERS = "y" Then
+				ShortMsg = MachineNamestr & " " & AlterString("CPU(" & InstanceName & ")"," ","-") & " EXCEEDED " & strdVal
+			Else
+				ShortMsg = MachineNamestr & " " & AlterString("CPU(" & InstanceName & ")"," ","-") & " EXCEEDED NULL"
+			End If
+			MSActions Sev_Exceeded, shortmsg, AKPID, resmsg, longmsg
+			ConTimesOver(nDataID) = 0 
+			EventFired(nDataID) = true
+		End If
+	End If
+
+
+	If DO_EVENT = "y" And dval < TH_OVER Then
+		If DO_DEBUG = "y" Then 
+			Print #2, now() & "       " &  "						" & "	Load is Under Threshold"
+			Print #2, now() & "       " &  "						" & "		CPU Load Value 		: " & strdVal
+			Print #2, now() & "       " &  "						" & "		Threshold Value 	: " & Cstr(TH_OVER)
+		End If
+		ConTimesUnder(nDataID) = ConTimesUnder(nDataID) + 1
+		'Stops Var overflowing if continually alright
+		If ConTimesUnder(nDataID) = 100 Then
+			ConTimesUnder(nDataID) = 99
+		End If
+		ConTimesOver(nDataID) = 0 
+		If ConTimesUnder(nDataID) = CONSEC_TIME And EventFired(nDataID) = True Then
+			If DO_DEBUG = "y" Then 
+				Print #2, now() & "       " &  "						" & "	CPU Load is below threshold"
+				Print #2, now() & "       " &  "						" & "		Required Consecutive times"
+				Print #2, now() & "       " &  "						" & "		Times Under		: " & ConTimesUnder(nDataID)
+				Print #2, now() & "       " &  "						" & "		Required Times 	: " & CONSEC_TIME
+			End If
+			resmsg = "NT_MachineFolder = " & NT_MachineFolder
+			longmsg = "CPU Load for CPU(" & InstanceName & ") is " & strdVal & ";" & chr$(10)
+			longmsg = longmsg & "Threshold for Processor Util is " & Cstr(TH_OVER) & "%" & chr$(10)
+			longmsg = longmsg & "This Processor has been below this threshold " & ConTimesUnder(nDataID) & " Times" & chr$(10)
+			longmsg = longmsg & "Required Consecutive times before an event is fired is " & Cstr(CONSEC_TIME) & " Times"
+			If DO_NUMBERS = "y" Then
+				ShortMsg = MachineNamestr & " " & AlterString("CPU(" & InstanceName & ")"," ","-") & " NORMAL " & strdVal
+			Else
+				ShortMsg = MachineNamestr & " " & AlterString("CPU(" & InstanceName & ")"," ","-") & " NORMAL NULL"
+			End If
+			If SEND_NORMAL = "y" Then
+				MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+			Else
+				If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+					MSActions Sev_Normal, shortmsg, AKPID, resmsg, longmsg
+				End If
+			End If
+			ConTimesUnder(nDataID) = 0 
+			EventFired(nDataID) = false
+		End If
+	End If
+
+	' Check threshold, and do action
+
+	' Do graphing
+	If DO_DATA = "y" Then
+		If IterationCount() = 1 Then
+			DataHeader "Counter Value for CPU(" & InstanceName & ") Utilisation ^^%" , 0, nDataID
+		End If
+		DataLog nDataID, dval, "CPU Usage Value : " & strdVal
+	End If
+
+End Sub
+
+Sub Main()
+	On Error GoTo Main_Error
+	If Iterationcount() =1 Then	
+		Openfilefail = false
+	End If
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+
+
+	Dim agntmsg As String
+	Dim lastcomma As Integer
+	Dim KSName As String 
+	Dim CpuStartPos As Integer
+	Dim InstancePointer As Integer
+	Dim createret As Integer
+
+	If iterationcount() =1 Then
+    	Dim NameSize As Long
+	    Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+    	MachineName1 = Space$(16)
+	    NameSize = Len(MachineName1)
+    	X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+		Machinenamestr = lcase(trim(Machinenamestr))
+	End If
+
+	DO_DEBUG = DEBUG
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		KSName=	"NT_SSICPULoaded" & str(getjobid())
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		If Openfilefail = true And DO_DEBUG = DEBUG Then 
+			eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+			longm = "Openned debug file " &  chr$(10) 
+			longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+			MSActions 40,eventmsg , AKPID, resname, longm
+			Openfilefail = false
+			Print #2 , Now() & "        " & "*********Restart Debugging*********"
+		End If
+	End If
+	
+	If iterationcount() =1 Then
+		If DO_DEBUG = "y" Then 
+			Print #2, now() & "       " &  "Retrieving list of CPU's"
+		End If
+
+		CPUnumber = OBJ.Instancevalue("Processor","% Processor time",0,agntmsg,1)
+		'Check if number of CPU has been returned
+		If CPUnumber = -1 Then
+			If DO_DEBUG = "y" Then 
+				Print #2, now() & "       " &  "Failed to Retrieve list of CPU'S"
+			End If
+			detailmsg = "Error Retrieving number of CPU'S installed on server"
+			MCAbort resname, detailmsg
+		Else
+			'if it has, create InstanceName and instindex from the CPU Count
+			If DO_DEBUG = "y" Then 
+				Print #2, now() & "       " &  "Number of CPU instances Found : " &  str(CPUnumber)
+				Print #2, now() & "       " &  "		agntmsg Names		  : " &  agntmsg
+			End If
+
+			For I = 1 To CPUNumber
+				InstanceName = InstanceName & Item$(agntmsg,I,,chr$(10)) & ","
+				If DO_DEBUG = "y" Then 
+					Print #2, now() & "       " &  "						" & Item$(InstanceName,I,,",")
+					Print #2, now() & "       " &  "						" & InstanceName
+				End If
+			Next I
+
+			'Trim last "," from both var's
+			lastcomma = Len(InstanceName) -1
+			InstanceName = Mid(InstanceName,1,lastcomma)
+			CPUcount = itemcount(InstanceName,",")
+			ReDim ConTimesOver(CPUcount) 
+			ReDim ConTimesUnder(CPUcount) 
+			ReDim EventFired(CPUcount) 
+
+			If DO_DEBUG = "y" Then 
+				Print #2, now() & "       " &  "InstanceName : " & InstanceName
+			End If
+
+		End If
+	End If
+
+
+	If DO_DEBUG = "y" Then 
+		Print #2, now() & "       " &  "						" & "Number of CPU's  : " & str(CPUcount)
+	End If
+
+
+	For InstancePointer= 1 To CPUcount
+		If DO_DEBUG = "y" Then 
+			Print #2, now() & "       " &  "						" & "Checkin CPU   : " & Item$(InstanceName,InstancePointer,,",")
+		End If
+		If Item$(InstanceName,InstancePointer,,",")	= "_Total" Then
+			If ALL_CPU = "y" Then
+				If DO_DEBUG = "y" Then 
+					Print #2, now() & "       " &  "						" & "Set to monitor total CPU usage"
+				End If
+				GetCounterValue  "Processor", "% Processor Time",Item$(InstanceName,InstancePointer,,","),InstancePointer-1,THRESHOLD2
+			End If
+		Else
+			GetCounterValue  "Processor", "% Processor Time",Item$(InstanceName,InstancePointer,,","),InstancePointer-1,THRESHOLD1
+		End If 
+	Next InstancePointer
+
+	
+	'Create one row for each counter
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Checking CPU's"
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resname,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+
+End Sub
+
+'### End KPS Section

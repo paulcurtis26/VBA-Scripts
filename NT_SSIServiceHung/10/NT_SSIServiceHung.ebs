@@ -1,0 +1,455 @@
+'### Copyright (c) 1996, 1997 NetIQ Corp. All rights reserved.
+'### 
+'### NT_SSIServiceHung.ks
+'### detects if the user specified service is hung. If so, report an event and starts the service
+'###
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Check if any user specified service is hung. If so, optionally kill or restart it
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""		'Drop on machine object
+'### End Type Section
+
+'### Begin KPP Section
+
+
+'### Author 		: NetIQ
+'### Version		: 1.2
+'### Description	: Monitors services 
+
+'### Changed by		: Dayanand Sankar (713) 245-1556 (Property of Shell Services International)
+'### Date			: 9/9/98
+'### Revision       : 1.2
+'### Enhancements 	: -Change to fix duplicate alerts  
+
+'### Changed by		: Dayanand Sankar (713) 245-1556 (Property of Shell Services International)
+'### Date			: 8/12/98
+'### Revision       : 1.1
+'### Enhancements 	: -Change to make the exclusion lists case insensitive  
+
+'### Changed by		: Dayanand Sankar (713) 245-1556 (Property of Shell Services International)
+'### Date			: 6/8/98
+'### Revision       : 1.0
+'### Enhancements 	: -Initial Clear message and Clear message after a threshold has been
+'###				   reached and then falling below that threshold 'n' consecutive times.
+'###				  -Also event messages are formatted to represent 
+'###				   Counter, Value and Number with only spaces seperating these three entities.
+
+
+'[V<CPReady. This KS monitors HUNG services.Use * To check all automatic services.A service Is HUNG If it Is in Start-Pending, Stop-Pending, Continue-Pending Or Pause-Pending For a consec. intervals.Hung service can be killed Or restarted.(Version 1.1)>V]
+Const InclusionList1 = "*"			'[M<Services (List1), separated by comma w/ no space>M] [T<String,80,',',>T] 
+Const Threshold1     = 2 			'[M<Threshold (List1) - # of consecutive iterations the service is hung>M] [T<Integer,,,1, 40, SevLevel>T] 	
+Const InclusionList2 = ""			'[M<Services (List2), separated by comma w/ no space>M] [T<String,80,',',>T] 
+Const Threshold2     = 0 			'[M<Threshold (List2) - # of consecutive iterations the service is hung>M] [T<Integer,,,0, 40, SevLevel>T] 	
+Const InclusionList3 = ""			'[M<Services (List3), separated by comma w/ no space>M] [T<String,80,',',>T] 
+Const Threshold3     = 0 			'[M<Threshold (List3) - # of consecutive iterations the service is hung>M] [T<Integer,,,0, 40, SevLevel>T] 	
+Const ExclusionList = ""			'[M<Services to EXCLUDE, separated by comma w/ no space>M] [T<String,80,',',>T] 
+Const MaxRetrys = 3		'[M<Number of times to Retry enummerating services>M] [T<Integer,,,1, 100, Retrys>T]
+Const DO_DATA = "n"					'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const KillProc = "y"				'[M<Kill the hung service? (y/n)>M] [T<String,1, ,"yn">T]
+Const AutoStart = "y"   			'[M<Auto Start Service after the hung service is killed? (y/n)>M] [T<String,1, ,"yn">T]
+Const Sev_FailStart = 5				'[M<Severity - Failed to AutoStart>M] [T<Integer,,,1, 40, SevLevel>T] 
+Const Sev_RestartOK = 25 			'[M<Severity - Succeeded to AutoStart>M] [T<Integer,,,1, 40, SevLevel>T] 
+Const Sev_NotRestart = 18 			'[M<Severity - If not to AutoStart>M] [T<Integer,,,1, 40, SevLevel>T] 
+Const Sev_FailGetStatus = 10		'[M<Severity - If failed to retrieve service status>M] [T<Integer,,,1, 40, SevLevel>T] 
+Const Sev_NotKillable = 10			'[M<Severity - If failed to kill the service>M] [T<Integer,,,1, 40, SevLevel>T] 
+
+'[A<When a service is detected hung, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Const DATA_UPVALUE = 100	' plot 100 if up
+Const DATA_DOWNVALUE = 0	' plot 0 if down
+Const resmsg = "NT_MachineFolder = " & NT_MachineFolder
+
+Const SERVICE_STOPPED = &H00000001
+Const SERVICE_START_PENDING = &H00000002
+Const SERVICE_STOP_PENDING = &H00000003
+Const SERVICE_RUNNING = &H00000004
+Const SERVICE_CONTINUE_PENDING = &H00000005
+Const SERVICE_PAUSE_PENDING = &H00000006
+Const SERVICE_PAUSED = &H00000007
+
+Const NQ_SERVICEINFO_STATUS = 0&
+Const NQ_SERVICEINFO_STARTTYPE = 1&
+Const NQ_SERVICEINFO_PATH = 2&
+
+Dim Graph_Index As Integer
+
+Dim NT As Object
+Dim OBJ As Object
+Const UNITUPDOWN = "^^up-down"
+
+Type SERV_STRUCT
+	Name As String
+	Count As Long
+	ClearCount As Long
+	FirstClearCount As Long
+	NormalClear As Boolean
+	FirstClear As Boolean
+End Type
+
+Private Serv() As SERV_STRUCT
+Private ServCnt As Long
+
+Global Const DONTCARE = -1&
+Global Const AUTO_START = 2&
+Private RealServices As String
+
+Function AlterString(sString As String, sCharToReplace As String, sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+
+Function KillProcess(ServName As String) As Boolean
+	Dim tmp&, path$, rc&, fname$, pid&
+	If (OBJ.ServiceInfo(ServName, NQ_SERVICEINFO_PATH, tmp, path)) Then
+		fname = FileParse$(path, 4)
+		If (OBJ.GetProcessID(fname, pid)) Then
+			If (OBJ.TerminateProcess(pid)) Then
+				KillProcess = True
+				Exit Function
+			End If
+		End If				
+	End If
+	KillProcess = False
+End Function
+
+Function CheckService(Servname As String, Threshold As Long, Objname As String)
+	Dim detailmsg$, tmp$
+	Dim sev&, idx&, CurrentStatus&, pid&
+	Dim RetVal As Double
+	Dim found As Boolean
+
+	found = False
+
+	For idx = 1 To ServCnt
+		If (Serv(idx).Name = Servname) Then
+			found = True
+			Exit For
+		End If
+	Next idx
+
+	If (found = False) Then
+		ServCnt = ServCnt +1
+		ReDim Preserve Serv(ServCnt)
+		idx = ServCnt
+		Serv(idx).Name = Servname
+		Serv(idx).Count = 0
+		Serv(idx).ClearCount = 0
+		Serv(idx).FirstClearCount = 0
+		Serv(idx).NormalClear = "False"
+		Serv(idx).FirstClear = "False"
+	End If
+
+	If (OBJ.ServiceInfo(Servname, NQ_SERVICEINFO_STATUS, CurrentStatus, tmp)) Then
+		If (CurrentStatus = SERVICE_START_PENDING Or _
+			CurrentStatus = SERVICE_STOP_PENDING Or	_
+			CurrentStatus = SERVICE_CONTINUE_PENDING Or	_
+			CurrentSTatus = SERVICE_PAUSE_PENDING) Then
+			Serv(idx).Count = Serv(idx).Count + 1
+			Serv(idx).FirstClear = -1
+			If Serv(idx).ClearCount <> 0 And Serv(idx).ClearCount < Threshold Then
+			   Serv(idx).ClearCount = 0
+			End If	 		
+			If Serv(idx).FirstClearCount <> 0 And Serv(idx).FirstClearCount < Threshold Then
+			   Serv(idx).FirstClearCount = 0
+			End If	 		
+			If (Serv(idx).Count = Threshold) Then
+				If (KillProc = "y") Then
+					If (KillProcess(Serv(idx).Name)) Then
+						If (AutoStart = "y") Then
+							If (Not OBJ.ServiceStart(Servname)) Then
+								detailmsg = "Fail to restart " & Servname
+								sev = Sev_FailStart
+								' do not reset Serv(i).Count so that we can retry to start it next time
+							Else
+								detailmsg = "Try to restart " & Servname
+								sev = Sev_RestartOK
+								'Serv(idx).Count = 0		'reset it only after successfully restarted it
+							End If
+						Else
+							'Serv(idx).Count = 0
+							detailmsg = "Not to restart " & Servname
+							sev = Sev_NotRestart
+						End If
+					Else
+						'Serv(idx).Count = 0
+						detailmsg = "Failed to kill " & Servname
+						sev = Sev_NotKillable
+					End If
+				Else
+					'Serv(idx).Count = 0
+					detailmsg = "Not to restart " & Servname
+					sev = Sev_NotRestart
+				End If
+				Serv(idx).ClearCount = 0
+				Serv(idx).FirstClearCount = 0
+				Serv(idx).NormalClear = -1
+				MSActions sev, AlterString(Servname, " ", "-") & " Hung-Service NULL", AKPID, Objname, detailmsg
+			End If
+			RetVal = DATA_DOWNVALUE
+		Else
+			'Serv(idx).Count = 0
+			Serv(idx).ClearCount = Serv(idx).ClearCount + 1
+			Serv(idx).FirstClearCount = Serv(idx).FirstClearCount + 1 		
+			If Serv(idx).Count <> 0	 And Serv(idx).Count < Threshold Then
+			   Serv(idx).Count = 0
+			End If	 		
+			If Serv(idx).ClearCount = Threshold And Serv(idx).NormalClear  = -1 Then
+				Serv(idx).Count = 0	 		
+				Serv(idx).FirstClearCount = 0
+				Serv(idx).FirstClear = -1
+				Serv(idx).NormalClear = 0
+				MSActions 40, AlterString(Servname, " ", "-") & " Service-status-normal NULL", AKPID, Objname, detailmsg
+			ElseIf Serv(idx).FirstClearCount = Threshold And Serv(idx).NormalClear <> -1 And Serv(idx).FirstClear <> -1 Then
+				Serv(idx).Count = 0	 		
+				Serv(idx).FirstClearCount = 0
+				Serv(idx).FirstClear = -1
+				Serv(idx).NormalClear = 0
+				MSActions 40, AlterString(Servname, " ", "-") & " Service-status-normal NULL", AKPID, Objname, detailmsg
+			End If
+
+			RetVal = DATA_UPVALUE
+
+		End If 
+
+		If DO_DATA = "y" Then
+			If IterationCount() = 1 Then
+				DataHeader "ServiceHung - " & Servname & UNITUPDOWN, 0, Graph_Index
+   			End If
+			If RetVal = DATA_UPVALUE Then
+				detailmsg = Servname & " is up"
+			End If
+    		DataLog Graph_Index, RetVal, detailmsg
+			Graph_Index = Graph_Index + 1
+		End If 	
+	Else
+		Serv(idx).Count = Serv(idx).Count + 1
+		Serv(idx).FirstClear = -1
+		If Serv(idx).ClearCount <> 0 And Serv(idx).ClearCount < Threshold Then
+		   Serv(idx).ClearCount = 0
+		End If	 		
+		If Serv(idx).FirstClearCount <> 0 And Serv(idx).FirstClearCount < Threshold Then
+		   Serv(idx).FirstClearCount = 0
+		End If	 		
+		If (Serv(idx).Count = Threshold) Then
+			MSActions Sev_FailGetStatus, AlterString(Servname, " ", "-") & " Failed-to-read-service-status NULL", AKPID, Objname, ""
+			Serv(idx).ClearCount = 0
+			Serv(idx).FirstClearCount = 0
+			Serv(idx).NormalClear = -1
+		End If
+	End If
+		
+End Function
+
+
+Dim ServiceCount As Long
+Dim ServiceNameList() As String
+Dim ServiceThreshold() As Long
+
+Sub Main()
+	Dim Objname As String
+	Dim ServiceNames As String
+
+	Dim X As Long
+	Dim Y As Long
+	Dim Count As Long
+
+	Dim ExclusionNameList() As String
+	Dim ExclusionListCount As Long
+	Dim ExcludedService As Long
+	Dim RetryCount As Long
+	Dim ReturnCode As Long
+
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+ 
+	Graph_Index = 0	 		' reset to 0 on every interval
+
+	If IterationCount() = 1 Then
+
+		ServiceCount = 0
+		ExclusionListCount = 0
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ProcessExclusionList:
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+		If (ExclusionList <> "") Then
+			ExclusionListCount = ItemCount(ExclusionList, ",")
+
+			ReDim ExclusionNameList(ExclusionListCount) As String
+
+			For X = 1 To ExclusionListCount
+				ExclusionNameList(X) = Item$(ExclusionList,X,,",")
+			Next X
+		End If
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ProcessInclusionList1:
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+		If (InclusionList1 = "*") Then
+
+			Count = OBJ.ServiceEnum(DONTCARE, AUTO_START, ServiceNames)
+		
+			If Count = -1 Then
+				RetryCount = RetryCount + 1
+
+				If RetryCount > MaxRetrys Then
+					MCAbort resmsg, "Failed to enumerate services"
+				Else
+					MCSleep 5000
+					GoTo ProcessInclusionList1
+				End If
+
+			End If
+		Else
+			ServiceNames = InclusionList1
+			Count = ItemCount(InclusionList1, ",")
+		End If
+
+		For X = 1 To Count
+
+			ExcludedService = False
+
+			For Y = 1 To ExclusionListCount
+				If LCase$(Item$(ServiceNames,X,,",")) = LCase$(ExclusionNameList(Y)) Then
+					ExcludedService = True
+					Exit For
+				End If
+			Next Y
+
+			If ExcludedService = False Then
+				ServiceCount = ServiceCount + 1
+
+				ReDim Preserve ServiceNameList(ServiceCount) As String
+				ReDim Preserve ServiceThreshold(ServiceCount) As Long
+
+			    ServiceNameList(ServiceCount) = Item$(ServiceNames,X,,",")
+			    ServiceThreshold(ServiceCount) = Threshold1
+			End If
+
+		Next X
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ProcessInclusionList2:
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+		If (InclusionList2 <> "") Then
+			ServiceNames = InclusionList2
+			Count = ItemCount(InclusionList2, ",")
+
+			For X = 1 To Count
+
+				ExcludedService = False
+
+				For Y = 1 To ExclusionListCount
+					If LCase$(Item$(ServiceNames,X,,",")) = LCase$(ExclusionNameList(Y)) Then
+						ExcludedService = True
+						Exit For
+					End If
+				Next Y
+
+				If ExcludedService = False Then
+					For Y = 1 To ServiceCount
+						If ServiceNameList(Y) = Item$(ServiceNames,X,,",") Then
+							ServiceThreshold(Y) = Threshold2
+							GoTo ProcessInclusionList3
+						End If
+					Next Y
+
+					ServiceCount = ServiceCount + 1
+
+					ReDim Preserve ServiceNameList(ServiceCount) As String
+					ReDim Preserve ServiceThreshold(ServiceCount) As Long
+
+				    ServiceNameList(ServiceCount) = Item$(ServiceNames,X,,",")
+				    ServiceThreshold(ServiceCount) = Threshold2
+				End If
+
+			Next X
+
+		End If
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ProcessInclusionList3:
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+		If (InclusionList3 <> "") Then
+			ServiceNames = InclusionList3
+			Count = ItemCount(InclusionList3, ",")
+
+			For X = 1 To Count
+
+				ExcludedService = False
+
+				For Y = 1 To ExclusionListCount
+					If LCase$(Item$(ServiceNames,X,,",")) = LCase$(ExclusionNameList(Y)) Then
+						ExcludedService = True
+						Exit For
+					End If
+				Next Y
+
+				If ExcludedService = False Then
+					For Y = 1 To ServiceCount
+						If ServiceNameList(Y) = Item$(ServiceNames,X,,",") Then
+							ServiceThreshold(Y) = Threshold3
+							GoTo CheckServiceCount
+						End If
+					Next Y
+
+					ServiceCount = ServiceCount + 1
+
+					ReDim Preserve ServiceNameList(ServiceCount) As String
+					ReDim Preserve ServiceThreshold(ServiceCount) As Long
+
+				    ServiceNameList(ServiceCount) = Item$(ServiceNames,X,,",")
+				    ServiceThreshold(ServiceCount) = Threshold3
+				End If
+
+			Next X
+
+		End If
+
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+CheckServiceCount:
+'/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+		If ServiceCount = 0 Then
+			Err.Description = "No Service is given"
+			Err.raise 4002
+		End If
+
+	End If
+
+	
+	For X = 1 To ServiceCount
+		ReturnCode = CheckService(ServiceNameList(X), ServiceThreshold(X), resmsg)
+	Next X
+
+End Sub
+
+'### End KPS Section

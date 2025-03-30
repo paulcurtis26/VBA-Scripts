@@ -1,0 +1,453 @@
+'### Copyright (c) 1997 NetIQ Corp. All rights reserved.
+'### 
+'### NT_SSIRemoteServiceDown.ks
+'### detects if the any of the services on a remote machine is down.
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.415.1.2"
+Const KSVerID = "3.4"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=12/21/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Detect if any of the services on a remote machine is down
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""			'Drop on machine object
+'### End Type Section
+
+'### Begin KPP Section
+
+'[V<CPReady.MachineList lists machines to be monitored. When ANY machine's specified services is detected down or not communicable from the machine where this KS is dropped, an event is raised. (Version 3.4ac)>V]
+Const MachineList = "LONSMH0S0102" 		'[M<MachineList, separated by "," w/ no space>M] [T<String,1000,',',>T]
+Const Services = "Messenger,spooler"	'[M<Services, separated by comma w/ no space>M] [T<String,1000,',',>T] 
+Const DO_NUMBERS  = "y"					'[M<Display Number Values? (y/n)>M] [T<String,1,,"yn">T]
+Const AutoStart = "y"   				'[M<Auto Start Service? (y/n)>M] [T<String,1, ,"yn">T]
+Const Sev_FailStart = 5					'[M<Severity - Failed to AutoStart>M] [T<Integer,,,1, 39, SevLevel>T] 
+Const Sev_NotRestart = 18 				'[M<Severity - If not to AutoStart>M] [T<Integer,,,1, 39, SevLevel>T] 
+Const Sev_NotExist = 18 				'[M<Severity - If Service does not Exist>M] [T<Integer,,,1, 39, SevLevel>T] 
+Const DEBUG = "n"   					'[M<Write Debug Information? (y/n)>M] [T<String,1, ,"yn">T]
+Const Consec_times = 1 '[M<Consecutive Times before Event Fired>M] [T<Integer,,,1, 40, Time(s)>T] 
+
+'[A<When the machine is detected down, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Const SEND_NORMAL = "y"		
+Const Sev_RestartOK = 40 
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+Dim Machinenamestr As String
+Dim resname As String
+Option Base 1
+
+Global Const REG_SZ As Long = 1
+Global Const HKEY_LOCAL_MACHINE = &H80000002 
+Global Const ERROR_NONE = 0
+Global Const KEY_ALL_ACCESS = &H3F 
+
+Declare Function RegCloseKey Lib "advapi32.dll" _ 
+		(ByVal hKey As Long) As Long 
+Declare Function RegOpenKeyEx Lib "advapi32.dll" Alias _ 
+		"RegOpenKeyExA" (ByVal hKey As Long, ByVal lpSubKey As String, _ 
+		ByVal ulOptions As Long, ByVal samDesired As Long, ByRef phkResult As Long) As Long 
+Declare Function RegQueryValueExString Lib "advapi32.dll" Alias _ 
+		"RegQueryValueExA" (ByVal hKey As Long, ByVal lpValueName As _ 
+		String, ByVal lpReserved As Long, lpType As Long, ByVal lpData _
+		As String, lpcbData As Long) As Long 	
+
+
+Function GetInstallPath() As String
+	Dim lRetVal&, hKey&, ValLen&, DataName$, DataLen&, rc&
+	
+	GetInstallPath = ""
+	lRetVal = RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\NetIQ\AppManager", 0, _
+		KEY_ALL_ACCESS, hKey)
+	If (lRetVal <> ERROR_NONE) Then
+		GoTo Installpath_error
+	End If
+	DataLen = 256
+	DataName = String$(DataLen, 0)	
+	lRetVal = RegQueryValueExString(hKey, "InstallPath", 0&, REG_SZ, DataName, DataLen)
+	If (lRetVal <> ERROR_NONE) Then
+		GoTo Installpath_error
+	End If
+	DataName = Left$(DataName, DataLen-1)
+	DataName = Trim$(DataName)
+	GetInstallPath = DataName & "\KSDebug\"
+
+GoTo Installpath_exit
+
+Installpath_error:
+	DO_DEBUG = "n"
+	If DO_NUMBERS = "y" Then
+		eventmsg = MachName & " DEBUG ERROR " & alterstring(Time()," ","-")
+	Else
+		eventmsg = MachName & " DEBUG ERROR NULL"
+	End If
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "Failed to get NetIQ Install Path" & chr$(10)
+	longm = longm & "from the registry" & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	GetInstallPath=""
+Installpath_exit:
+	lRetVal = RegCloseKey (hKey)
+
+End Function
+
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = GetInstallPath()
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+Dim NT As Object
+Dim OBJ As Object
+Private NumServ As Integer
+Private NumMach As Integer
+Private Machines As String
+
+
+
+'Used to store the Service state
+Type SERV_STRUCT
+ 	ServerName As String
+	ServiceName As String
+	DownCount As Integer
+	EventFired As Long
+End Type        
+
+
+Dim ServArray() As SERV_STRUCT
+
+Sub Main()
+	'On Error GoTo main_error
+	resname = "NT_MachineFolder = " & NT_MachineFolder
+	Machinenamestr = NT_MachineFolder
+	Dim eventmsg As String
+	Dim LongMessage As String
+	Dim ShortMsg As String
+
+	Dim sev As Integer
+	Dim Machname$, Servname$, resmsg$, detailmsg$
+	Dim KSName As String
+
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+
+	'Define KS Name, used in Debug File name 
+	DO_DEBUG = DEBUG
+
+	NetIQInstallpath = GetInstallPath()
+
+	If DO_DEBUG  = "y" Then
+		If NetIQInstallpath <> "" Then
+			debugproccess = true
+			If iterationcount() =1 Then
+				createret = createdebugdir	'Use Function to Create Directory if its not already there
+			End If
+			KSName = "NT_SSIRemoteServiceDown" & str(getjobid())
+			If FileExists(NetIQInstallpath & KSName & ".txt") Then
+
+				If filelen(NetIQInstallpath & KSName & ".txt") > 512000 Then
+		
+					If FileExists(NetIQInstallpath & KSName & ".old") Then
+						kill NetIQInstallpath & KSName & ".old"
+					End If
+
+					Name NetIQInstallpath & KSName & ".txt" As NetIQInstallpath & KSName & ".old"
+
+				End If
+			End If
+			'Open Debug File
+			Open NetIQInstallpath & KSName & ".txt" For Append Access Write As #2
+			If Openfilefail = true And DO_DEBUG = DEBUG Then 
+				If DO_NUMBERS = "y" Then
+					eventmsg = Machinenamestr & " " &  "DEBUG NORMAL " & alterstring(Time()," ","-")
+				Else
+					eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+				End If
+				longm = "Opened debug file " &  chr$(10) 
+				longm = longm & NetIQInstallpath & KSName & ".txt" & chr$(10) 
+				MSActions 40,eventmsg , AKPID, resname, longm
+				Openfilefail = false
+				Print #2 , Now() & "        " & "*********Restart Debugging*********"
+			End If
+			debugproccess = false
+		End If
+	End If
+
+	If IterationCount() = 1 Then		
+		NumServ = ItemCount(Services, ",")	'Get number of services to monitor
+		If NumServ = 0 Then					'Check if there are any services to monitor
+			If DO_DEBUG ="y" Then			'Write Debug Info 
+				Print #2, Now() & "      " & "No Service is given"
+			End If
+			Err.Description = "No Service is given"
+			Err.raise 4002
+		End If
+		NumMach = ItemCount(MachineList, ",")	'Get number of machines to monitor
+		If NumMach = 0 Then						'Check if there are any
+			If DO_DEBUG ="y" Then
+				Print #2, Now() & "      " & "No Machines Listed, using local Machine"
+			End If
+
+			Machines = GetMachName()		'If there are not then use the local machine
+			NumMach = 1
+		Else
+			Machines = MachineList
+		End If
+		'Create enough array elements to store each service/machine
+		ReDim ServArray(NumMach*NumServ)
+		'fill array
+		For I=1 To NumMach
+			For J = 1 To NumServ
+				ServArray(J+(NumServ*(I-1))).ServerName=Item$(Machines, I,, ",") 'Get machine name
+				ServArray(J+(NumServ*(I-1))).ServiceName=Item$(Services, J,, ",")	'Get service name
+				ServArray(J+(NumServ*(I-1))).DownCount=0
+				ServArray(J+(NumServ*(I-1))).EventFired=False
+				If DO_DEBUG="y" Then	'Write Debug Info
+					Print #2, Now() & "      " & "		Filling Array Element : " & J+(NumServ*(I-1))
+					Print #2, Now() & "      " & "		       Machine Name   : " & ServArray(J+(NumServ*(I-1))).ServerName
+					Print #2, Now() & "      " & "		       Service Name   : " & ServArray(J+(NumServ*(I-1))).ServiceName
+				End If
+
+			Next J
+		Next I
+
+		If DO_DEBUG="y" Then
+			For I = 1 To ubound(ServArray)
+				Print #2, Now() & "      " & "		Machine Name    : " & ServArray(I).ServerName
+				Print #2, Now() & "      " & "		Service Name    : " & ServArray(I).ServiceName
+				Print #2, Now() & "      " & "		Down Count      : " & ServArray(I).DownCount
+				Print #2, Now() & "      " & "		Event Fired     : " & ServArray(I).EventFired
+			Next I
+		End If
+				
+
+	End If
+	
+	'Loop around Array
+	For I = 1 To Ubound(ServArray)
+			MachName = ServArray(I).ServerName	'Get current machine name
+			ServName = ServArray(I).ServiceName	'Get current Service name
+			If DO_DEBUG="y" Then	'Write debug Info
+				Print #2, Now() & "      " & "		Machine Name :" & MachName & ":"
+				Print #2, Now() & "      " & "		Service Name :" & ServName & ":"
+			End If
+
+			If (OBJ.RemoteServiceExist(Machname,Servname)) Then	'Check if service exists on machine specified
+				If DO_DEBUG="y" Then	'Write debug Info
+					Print #2, Now() & "      " & "		Service : " & ServName & " Found"
+				End If
+				'Check if service is up
+				If (Not OBJ.RemoteServiceUp(Machname, Servname)) Then
+					If DO_DEBUG="y" Then	'Write debug info
+						Print #2, Now() & "      " & "		Service : " & ServName & " Not Up"
+					End If
+					'If service is down then increemnt the counter that stores the number of times the service is down
+					ServArray(I).DownCount = ServArray(I).DownCount + 1
+
+					resmsg = Servname & " on Machine " & Machname
+					'Check if the user has enabled Auto Restart
+					If (AutoStart = "y") Then
+						If DO_DEBUG="y" Then
+							Print #2, Now() & "      " & "		Service : " & ServName & " Try to Auto Start"
+						End If
+						'Try to auto restart the service
+						If (Not OBJ.RemoteServiceStart(Machname, Servname)) Then
+							If DO_DEBUG="y" Then
+								Print #2, Now() & "      " & "		Service : " & ServName & " Failed to Auto Start"
+							End If
+							'If service could not be restarted Build text for MSAction
+							detailmsg="Service " & lcase(ServName) & " Has Not been Automatically Restarted on machine " & lcase(MachName)
+							If DO_NUMBERS = "y" Then
+								ShortMsg = MachName & " " & AlterString(lcase(ServName)," ","-") & " FAIL " & alterstring(Time()," ","-")
+							Else
+								ShortMsg = MachName & " " & AlterString(lcase(ServName)," ","-") & " FAIL NULL"
+							End If
+							sev = Sev_FailStart
+ 						Else
+							If DO_DEBUG="y" Then
+								Print #2, Now() & "      " & "		Service : " & ServName & " Succedded to Auto Start"
+							End If
+
+							'If service could be restarted Build text for MSAction
+							detailmsg="Service " & lcase(ServName) & " Has been Automatically Restarted on machine " & lcase(MachName)
+							If DO_NUMBERS = "y" Then
+								ShortMsg = MachName & " " & AlterString(lcase(ServName)," ","-") & " RESTORED " & alterstring(Time()," ","-")
+							Else
+								ShortMsg = MachName & " " & AlterString(lcase(ServName)," ","-") & " RESTORED NULL"
+							End If
+							sev = Sev_RestartOK
+		  				End If
+					Else
+							If DO_DEBUG="y" Then
+								Print #2, Now() & "      " & "		Service : " & ServName & " Not set to auto start and is down"
+							End If
+							'If the User has not set Auto restart build text for MSAction
+							detailmsg="Service " & lcase(ServName) & " is not set to be Automatically Restarted on machine " & lcase(MachName)
+							If DO_NUMBERS = "y" Then
+								ShortMsg = MachName & " " & AlterString(lcase(ServName)," ","-") & " DOWN " & alterstring(Time()," ","-")
+							Else
+								ShortMsg = MachName & " " & AlterString(lcase(ServName)," ","-") & " DOWN NULL"
+							End If
+							sev = Sev_NotRestart
+					End If
+					'Check if Restart has worked (If Set)
+					If sev = Sev_RestartOK Then
+							If DO_DEBUG="y" Then
+								Print #2, Now() & "      " & "		Service : " & ServName & " Send message that auto started"
+							End If
+							'if an event has already been sent for the service being down, then send an auto clear message
+							If ServArray(I).EventFired = true Then
+								Shortmsg = MachName & " " & lcase(ServName) & " RESTORED NULL"
+							End If
+							If SEND_NORMAL = "y" Then
+								MSActions sev, shortmsg, AKPID, "NT_MachineFolder = " & Machname, detailmsg
+							Else
+								If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+									MSActions sev, shortmsg, AKPID, "NT_MachineFolder = " & Machname, detailmsg
+								End If
+								If DO_DEBUG="y" Then
+									Print #2, Now() & "      " & "		Service : " & ServName & " SEND_NORMAL = n  and action is not command post so don't send after all"
+								End If
+							End If
+
+							ServArray(I).EventFired = false
+							ServArray(I).DownCount = 0
+					Else
+							If DO_DEBUG="y" Then
+								Print #2, Now() & "      " & "		Service : " & ServName & " Send message for Service state"
+							End If
+							MSActions sev, shortmsg, AKPID, "NT_MachineFolder = " & Machname, detailmsg
+							ServArray(I).EventFired = true
+							ServArray(I).DownCount = 0
+					End If
+					'check if the service failed to start and the consecutive times threshold has been exceeded
+					If sev=Sev_FailStart And ServArray(I).DownCount  >= Consec_Times Then
+							If DO_DEBUG="y" Then
+								Print #2, Now() & "      " & "		Service : " & ServName & " Number of consecutive times has been reached"
+							End If
+
+							MSActions sev, shortmsg, AKPID, "NT_MachineFolder = " & Machname, detailmsg
+							ServArray(I).EventFired = true
+							ServArray(I).DownCount = 0
+					End If 
+
+				Else
+					'If service is up then check if an event has previously been sent to say that the service is down
+					If DO_DEBUG="y" Then
+						Print #2, Now() & "      " & "		Service : " & ServName & " is Up"
+					End If
+
+					If ServArray(I).EventFired = true Then
+						If DO_DEBUG="y" Then
+							Print #2, Now() & "      " & "		Service : " & ServName & " back up so send auto clear message"
+						End If
+						detailmsg="Service " & lcase(ServName) & " Has been restored on machine " & lcase(MachName)
+						Shortmsg = MachName & " " & lcase(ServName) & " UP NULL"
+						If SEND_NORMAL = "y" Then
+							MSActions 40, Shortmsg , AKPID, "NT_MachineFolder = " & Machname, detailmsg
+						Else
+							If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+								MSActions 40, Shortmsg , AKPID, "NT_MachineFolder = " & Machname, detailmsg
+							Else
+								If DO_DEBUG="y" Then
+									Print #2, Now() & "      " & "		Service : " & ServName & " SEND_NORMAL = n  and action is not command post so don't send after all"
+								End If
+							End If
+						End If
+						ServArray(I).EventFired = false
+						ServArray(I).DownCount = 0
+					End If
+	
+				End If
+			Else
+				'If service is not found on the machine specified send an event
+				If DO_DEBUG="y" Then
+					Print #2, Now() & "      " & "		Service : " & ServName & " not found on machine " & MachName
+				End If
+				sev = Sev_NotExist
+				detailmsg = "The Service Could not be found." & Chr$(10) & "Check Permissions for Local MC service, to ensure that the account used can view remote services" & Chr$(10) & "and also check Syntax of Service names specified"
+				If DO_NUMBERS = "y" Then
+					ShortMsg = MachName & " " & AlterString(lcase(ServName)," ","-") & " NOT-EXIST " & alterstring(Time()," ","-")
+				Else
+					ShortMsg = MachName & " " & AlterString(lcase(ServName)," ","-") & " NOT-EXIST NULL"
+				End If
+
+				MSActions sev, Shortmsg , AKPID, "NT_MachineFolder = " & Machname, detailmsg
+			End If
+	Next I
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Remote Services"
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	If DO_NUMBERS = "y" Then
+		eventmsg = MachName & " DEBUG ERROR " & alterstring(Time()," ","-")
+	Else
+		eventmsg = MachName & " DEBUG ERROR NULL"
+	End If
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & NetIQInstallpath & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resname,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+
+End Sub
+
+'### End KPS Section

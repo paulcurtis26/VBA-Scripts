@@ -1,0 +1,67 @@
+'### Copyright (c) 1997 NetIQ Corp. All rights reserved.
+'### 
+'### NT_ProcessDown.ebs
+'###
+'### This KS checks if user-selected precesses or applications (.EXE or .COM) are running.  Raise
+'### an event if not.
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'IamDiscovery = 0                       ' I am a discovery KS
+'Description = Find out if the user-specified processes are currently running
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""		'on Machine Folder
+'### End Type Section
+
+'### Begin KPP Section
+' The type and range of each variable can be enforced as follows
+' [T<Integer, maxList, delim, minValue, maxValue, units>T]	maxList and delim are place holders
+' [T<String, maxChars, delim, legalChars>T]
+' [M<message text>M]
+'[V<Find out if user-selected processes, e.g., clock or tcpsvcs, are currently running.  Raise an event if any is not running.
+Const Processes = "clock,tcpsvcs"	'[M<Processes, separated by "," w/ no space>M] [T<String,1000,',',>T] 
+Const Sev_NotRunning = 8 '[M<Severity - Process is not running>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When any specified process is not running, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Dim NT As Object
+Dim SYS As Object
+
+Sub Main()
+	Dim obj As String
+	Dim result As Double
+	Dim Detailmsg As String
+
+	If Processes = "" Then
+		Err.Description = "no process specified."
+		Err.raise 4104
+	End If
+
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set SYS = NT.System
+	
+	For I = 1 To ItemCount(Processes, ",")
+		obj = Item$(Processes, I,, ",")
+		result = SYS.CounterValue("Process", "% Processor Time", obj)
+
+		If result = -1 Then
+			' failed to verify it's running
+			Detailmsg = "Please check the path or use the task manager/perfmon to see if the process is still running."
+			MSActions Sev_NotRunning, obj & " is not running", AKPID, "" , Detailmsg
+		End If
+	Next I
+End Sub
+
+'### End KPS Section
+

@@ -1,0 +1,92 @@
+'### Copyright (c) 1997 NetIQ Corp. All rights reserved.
+'### 
+'### NT_RemoteServiceDown.ks
+'### detects if the any of the services on a remote machine is down.
+'###
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Detect if any of the services on a remote machine is down
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""			'Drop on machine object
+'### End Type Section
+
+'### Begin KPP Section
+'[V<MachineList lists machines to be monitored. When ANY machine's specified services is detected down or not communicable from the machine where this KS is dropped, an event is raised.>V]
+Const MachineList = "" '[M<MachineList, separated by "," w/ no space>M] [T<String,1000,',',>T]
+Const Services = "NetIQmc"	'[M<Services, separated by comma w/ no space>M] [T<String,1000,',',>T] 
+Const AutoStart = "y"   ' [M<Auto Start Service? (y/n)>M] [T<String,1, ,"yn">T]
+Const Sev_FailStart = 5	'[M<Severity - Failed to AutoStart>M] [T<Integer,,,1, 40, SevLevel>T] 
+Const Sev_RestartOK = 25 '[M<Severity - Succeeded to AutoStart>M] [T<Integer,,,1, 40, SevLevel>T] 
+Const Sev_NotRestart = 18 '[M<Severity - If not to AutoStart>M] [T<Integer,,,1, 40, SevLevel>T] 
+
+'[A<When the machine is detected down, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Dim NT As Object
+Dim OBJ As Object
+Private NumServ As Integer
+Private NumMach As Integer
+Private Machines As String
+
+Sub Main()
+	Dim Machname$, Servname$, resmsg$, detailmsg$
+
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+ 
+	If IterationCount() = 1 Then
+		NumServ = ItemCount(Services, ",")
+		If NumServ = 0 Then
+			Err.Description = "No Service is given"
+			Err.raise 4002
+		End If
+		NumMach = ItemCount(MachineList, ",")
+		If NumMach = 0 Then
+			Machines = GetMachName()
+			NumMach = 1
+		Else
+			Machines = MachineList
+		End If
+	End If
+	
+	For I = 1 To NumMach
+		Machname = Item$(Machines, I,, ",")
+		For J = 1 To NumServ
+			Servname = Item$(Services, J,, ",")
+			If (OBJ.RemoteServiceExist(Machname, Servname)) Then
+				If (Not OBJ.RemoteServiceUp(Machname, Servname)) Then
+					resmsg = Servname & " on Machine " & Machname
+					If (AutoStart = "y") Then
+						If (Not OBJ.RemoteServiceStart(Machname, Servname)) Then
+							detailmsg = "Fail to restart " & resmsg
+							sev = Sev_FailStart
+ 						Else
+							detailmsg = "Try to restart " & resmsg
+							sev = Sev_RestartOK
+		  				End If
+					Else
+						detailmsg = "Not to restart " & resmsg
+						sev = Sev_NotRestart
+					End If
+					MSActions sev, resmsg & " Down", AKPID, "NT_MachineFolder = " & Machname, detailmsg
+				End If
+			Else
+				detailmsg = "The service is not running. Use the control panel or sc command to see what happens."
+				MSActions sev, Servname & " does not exist on machine " & Machname, AKPID, "NT_MachineFolder = " & Machname, detailmsg
+			End If
+		Next J 
+	Next I
+End Sub
+
+'### End KPS Section

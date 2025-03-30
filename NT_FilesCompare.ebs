@@ -1,0 +1,106 @@
+'### Copyright (c) 1997-1999 NetIQ Corp. All rights reserved.
+'### 
+'### NT_FilesCmp.ks
+'### Compare the size, timestamp, and attribute of two files, and raise an action if differences are found.
+'###
+
+'$Revision: 1 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.0.370.4.1"
+Const KSVerID = "1.0"
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Compares the size, time stamp, and attributes of two files.
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = TenM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""
+'### End Type Section
+
+'### Begin KPP Section
+'[V<This KS compares the size, timestamp, and attribute of two files, and raise an action if differences are found.>V]
+Const FILE1_NAME = ""	'[M<File#1>M] [T<Req_String,256,,>T]
+Const FILE2_NAME = ""	'[M<File#2>M] [T<Req_String,256,,>T]
+Const DO_SIZE = "y"		'[M<Event if sizes are different? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_TIME = "y"		'[M<Event if modification times are different? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_ATTR = "y"		'[M<Event if attributes are different? (y/n)>M] [T<String,1,,"yn">T]
+Const SEV_SIZE = 5		'[M<Event Severity-Size>M] [T<Integer,,,1, 40, SevLevel>T]
+Const SEV_TIME = 5		'[M<Event Severity-Time>M] [T<Integer,,,1, 40, SevLevel>T]
+Const SEV_ATTR = 5		'[M<Event Severity-Attribute>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When the two given files are different, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+
+Sub Main()
+	Dim longm As String
+	Dim F1Len As Long
+	Dim F2Len As Long
+	Dim F1Time As Date
+	Dim F2Time As Date
+	Dim F1Attr As Integer
+	Dim F2Attr As Integer
+
+	On Error GoTo getout1
+
+	If Not FileExists(FILE1_NAME) Then
+		MCAbort "NT_MachineFolder = " & NT_MachineFolder, FILE1_NAME & " does not exist"
+	End If
+
+	On Error GoTo getout2
+
+	If Not FileExists(FILE2_NAME) Then
+		MCAbort "NT_MachineFolder = " & NT_MachineFolder, FILE2_NAME & " does not exist"
+	End If
+
+	On Error GoTo 0
+
+	If DO_SIZE = "y" Then
+		F1Len = FileLen(FILE1_NAME)
+		F2Len = FileLen(FILE2_NAME)
+		If F1Len <> F2Len Then
+			longm = "File length: " & FILE1_NAME & " = " & Cstr(F1Len) & " bytes; " & FILE2_NAME & " = " & Cstr(F2Len) & " bytes."
+			MSActions SEV_SIZE, "File lengths are different", AKPID, "", longm
+		End If
+	End If
+
+	If DO_TIME = "y" Then
+		F1Time = FileDateTime(FILE1_NAME)
+		F2Time = FileDateTime(FILE2_NAME)
+		If F1Time <> F2Time Then
+			longm = "File modification time: " & FILE1_NAME & " = " & Cstr(F1Time) & "; " & FILE2_NAME & " = " & Cstr(F2Time)
+			MSActions SEV_TIME, "File modificationtimes are different", AKPID, "", longm
+		End If
+	End If
+
+	If DO_ATTR = "y" Then
+		F1Attr = GetAttr(FILE1_NAME)
+		F2Attr = GetAttr(FILE2_NAME)
+		If F1Attr <> F2Attr Then
+			longm = "File attribute: " & FILE1_NAME & " = " & Cstr(F1Attr) & "; " & FILE2_NAME & " = " & Cstr(F2Attr)
+			MSActions SEV_ATTR, "File attributes are different", AKPID, "", longm
+		End If
+	End If
+	Exit Sub
+
+getout1:
+	MCAbort "NT_MachineFolder = " & NT_MachineFolder, "no permission for " & FILE1_NAME
+	Exit Sub
+
+getout2:
+	MCAbort "NT_MachineFolder = " & NT_MachineFolder, "no permission for " & FILE2_NAME
+	Exit Sub
+
+End Sub
+'### End KPS Section

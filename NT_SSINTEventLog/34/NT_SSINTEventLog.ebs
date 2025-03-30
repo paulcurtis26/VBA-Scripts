@@ -1,0 +1,314 @@
+'### Copyright (c) 1997 - 1999 NetIQ Corp. All rights reserved.
+'### 
+'### NT_SSINTEventLogSize
+'###
+'### use registry to get event log location and then check size
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.415.1.2"
+Const KSVerID = "3.4"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=12/21/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 1				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Monitor NT Event Log Size
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = TenM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""
+'### End Type Section
+
+'### Begin KPP Section
+'[V<CPReady.This KS monitors NT Event Log Size.(Version 3.4)>V]
+Const DO_EVENT = "y"		'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "y"			'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_Numbers = "y"		'[M<Show Values? (y/n)>M] [T<String,1,,"yn">T]
+Const Sev_exceeded = 8		'[M<Event Severity - SAM Size Over Threshold>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Sev_Normal = 40		'[M<Event Severity - SAM Size Normal>M] [T<Integer,,,1, 40, SevLevel>T]
+Const CONSEC_TIME = 1		'[M<Consecutive times before event fired ?>M] [T<Integer,,,1, 40, Times>T]
+Const TH_SAMSIZE = 1 		'[M<Threshold For NT Event Log Size > >M] [T<Integer,,, -2, 999999, MB>T]
+Const SEND_NORMAL = "y"		'[M<Send Mesage When File Size is Normal (AutoClear Message) ? (y/n)>M] [T<String,1,,"yn">T]
+Const DEBUG  = "n"   		'[M<Write Debug File? (y/n)>M] [T<String,1, ,"yn">T]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'[A<When the NT Event Log Size exceeds the threshold set, the selected action is executed.>A]
+
+'### End KPP Section
+
+'### Begin KPS Section
+Option Base 1
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Declare Function GetSystemDirectory Lib "kernel32" Alias "GetSystemDirectoryA"(ByVal lpbuffer As String,ByVal nsize As Long) As Long
+Const NL = chr$(10)			' newline
+Const resmsg = "NT_MachineFolder = " & NT_MachineFolder
+
+Private lThresh&
+
+Dim logEventFired As Boolean
+Dim logFailCount As Integer
+Dim logClearCount As Integer
+Dim Machinenamestr As String
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+Sub Main()
+	On Error GoTo main_error
+	If Iterationcount() =1 Then	
+		Openfilefail = false
+	End If
+	Dim resname As String
+	resname = "NT_MachineFolder = " & NT_MachineFolder
+	Dim sValue$, sValue1$, strType$, strErrorMsg$, detailmsg$
+	Dim lErrorCode&, lTotalError&, lDelta&
+	Dim version As String
+	Dim progid$
+	Dim values As String
+
+	If IterationCount() = 1 Then
+	    Dim NameSize As Long
+    	Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+	    MachineName1 = Space$(16)
+    	NameSize = Len(MachineName1)
+	    X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+
+		Machinenamestr = lcase(trim(Machinenamestr))
+
+		logEventFired= false
+		logFailCount = 0
+		logClearCount = 0
+
+	End If
+
+	DO_DEBUG = DEBUG
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		KSName=	"NT_SSINTEventLogSize" & str(getjobid())
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		If Openfilefail = true And DO_DEBUG = DEBUG Then 
+			eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+			longm = "Openned debug file " &  chr$(10) 
+			longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+			MSActions 40,eventmsg , AKPID, resname, longm
+			Openfilefail = false
+			Print #2 , Now() & "        " & "*********Restart Debugging*********"
+		End If
+	End If
+
+	Dim systempath1 As String * 255
+	Dim PathLen As Integer
+	Dim PathRet As Long
+	Dim dval As Long
+	PathLen = 254
+
+	PathRet = GetSystemDirectory(SystemPath1,PathLen)
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Getting system Path"
+		Print #2 , Now() & "        " & "	Get Path returned " & PathRet
+	End If
+	If PathRet > 0 Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "System Path : " & SystemPath1
+		End If
+		For y = 1 To Len(SystemPath1)
+			If ASC(Mid(SystemPath1,y,1)) <> 0 Then
+				systempath = SystemPath + Mid(SystemPath1,y,1)
+			End If
+		Next y
+	Else
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Failed to get system path, therefore NT Event Log Size cannot be found"
+			Close #2
+			GoTo main_exit
+		End If
+	End If
+	Dim sampath As String
+	sampath = trim(systempath) + "\CONFIG\SAM."
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "SAM File Path is " &   sampath	& "."
+	End If
+
+	If fileexists(sampath) Then
+		dval = filelen(sampath) / 1048576 'Convert to MB
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "SAM File size returned as " & dval & "MB"
+		End If
+ 	Else
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Failed to get SAM Size "
+			Close #2
+			GoTo main_exit
+		End If
+	End If		
+	If DO_EVENT = "y" Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Doing eventing"
+		End If
+
+		If dval >= TH_SAMSIZE  Then
+			eventmsg = format(dval,"0.00") & "MB"
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "		SAM Size " & eventmsg
+				Print #2 , Now() & "        " & "		Threshold set is " & str(TH_SAMSIZE) & " MB"
+				Print #2 , Now() & "        " & "		Incrementing count for condition Failure"
+			End If		
+   			longm = "SAM File size is  " & dval & " MB ; >TH = " & CStr(TH_SAMSIZE) & " MB " & chr$(10)
+			SamFailCount = SamFailCount + 1
+			SamClearCount = 0 
+			If SamFailCount = CONSEC_TIME Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "	Number of Consec times set is " & str(CONSEC_TIME)
+					Print #2 , Now() & "        " & "	Number of times the SAM file Size has been above Threshold is " & str(SamFailCount)
+					Print #2 , Now() & "        " & "	Firing Event as condition for Available Connections has been met required number of times"										
+				End If
+				SamEventFired = true
+				If DO_NUMBERS = "y" Then
+					eventmsg = Machinenamestr & " SAM-FILE-SIZE EXCEEDED " & eventmsg
+				Else
+					eventmsg = Machinenamestr & " SAM-FILE-SIZE EXCEEDED NULL"
+				End If
+				MSActions Sev_exceeded, eventmsg, AKPID, resname, longm
+				eventmsg = ""
+				SamFailCount = 0 
+			End If
+		ElseIf dval < TH_SAMSIZE Then
+			eventmsg = format(dval,"0.00") & "MB"
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "		SAM Size " & eventmsg
+				Print #2 , Now() & "        " & "		Threshold set is " & str(TH_SAMSIZE) & " MB"
+				Print #2 , Now() & "        " & "		Incrementing count for condition alright"
+				Print #2 , Now() & "        " & "		ClearCount = " & SamClearCount
+				Print #2 , Now() & "        " & "		EventFired = " & SamEventFired
+				Print #2 , Now() & "        " & "		FailCount = " & SamFailCount
+			End If		
+   			longm = "SAM File size is  " & dval & " MB ; <TH = " & CStr(TH_SAMSIZE) & " MB " & chr$(10)
+			SamFailCount = 0
+			SamClearCount = SamClearCount + 1
+			If SamClearCount = CONSEC_TIME And SamEventFired = true Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "		Number of Consec times set is " & str(CONSEC_TIME)
+					Print #2 , Now() & "        " & "		Number of times the SAM Size has been below Threshold is " & str(SamClearCount)
+					Print #2 , Now() & "        " & "		Condition for SAM File Size has been met required number of times"										
+					Print #2 , Now() & "        " & "			and an event has been sent to report that threshold has been exeeded so run AutoClear section"										
+				End If
+				If DO_NUMBERS = "y" Then
+					eventmsg = Machinenamestr & " SAM-FILE-SIZE NORMAL " & eventmsg
+				Else
+					eventmsg = Machinenamestr & " SAM-FILE-SIZE NORMAL NULL"
+				End If
+				If SEND_NORMAL = "y" Then
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & "		user has set parameter to send Normal messages so send auto Clear"
+					End If
+					MSActions Sev_Normal, eventmsg, AKPID, resname, longm
+				Else
+					If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & "		user has not set parameter to send Normal messages but as action"
+							Print #2 , Now() & "        " & "		is a Command post action send Auto Clear anyway"
+						End If
+						MSActions Sev_Normal, eventmsg, AKPID, resname, longm
+					End If
+				End If
+				SamEventFired = false
+				SamClearCount = 0 
+			End If
+		End If
+	End If	
+  	If DO_DATA = "y" Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Write Data log"
+		End If
+		If iterationcount() = 1 Then
+			DataHeader "SAM File Size^^MB", 0, 1
+		End If
+  	    Datalog 1, dval, "SAM File Size " & eventmsg
+ 	End If
+
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Checking SAM File Size"
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resname,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+
+
+End Sub
+
+'### End KPS Section

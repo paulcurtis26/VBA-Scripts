@@ -1,0 +1,1340 @@
+'### Copyright (c) 1996, 1997 NetIQ Corp. All rights reserved.
+'### 
+'### NT_SSIMachineDown.ks
+'### detects if the named machine is down.
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.415.1.2"
+Const KSVerID = "3.4"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=12/21/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'Description = Detect if any given NT machine is down or the NT registry is not reachable
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""			'Drop on machine object
+'### End Type Section
+
+'### Begin KPP Section
+'[V<CPReady.Monitors NT Machines. An event is raised if a machine does not respond. If the non-responsive machine is in the Treeview, its icon will blink; else the machine where the KS was dropped will blink. (Version 3.4ac)>V]
+Const MachineList = "" 		'[M<MachineList, separated by "," w/ no space>M] [T<String,1000,',',>T]
+Const CONSEC_TIME = 1 		'[M<Consecutive times>M] [T<long,,,1, 999999, #>T]
+Const PingRetriesParm = 3	'[M<Number of Ping Retries>M] [T<Integer,,,1, 10, Times>T]
+Const Severity = 5			'[M<Event Severity for Machine Error>M] [T<Integer,,,1, 39, SevLevel>T]
+Const NetSeverity = 15		'[M<Event Severity - Network Error>M] [T<Integer,,,1, 39, SevLevel>T]
+Const RPCSeverity = 25		'[M<Event Severity - RPC Error>M] [T<Integer,,,1, 39, SevLevel>T]
+Const AccessSeverity = 25	'[M<Event Severity - Access denied Error>M] [T<Integer,,,1, 39, SevLevel>T]
+Const DO_DATA = "n"			'[M<Collect Data? (y/n)>M] [T<String,1,,"yn">T]
+Const DEBUG = "n"			'[M<Write Debug Info? (y/n)>M] [T<String,1,,"yn">T]
+
+'[A<When the machine is detected down, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Const NormSeverity = 40	
+Const SEND_NORMAL = "y"	
+Const DATA_UPVALUE = 100    ' plot 100 if up
+Const DATA_DOWNVALUE = 0    ' plot 0 if down
+Const DATA_ERRORVALUE = 50  ' plot 50 if ping error (bad ip, can't find ping, create process failure)
+Const WaitTime = 300       ' 5000 milli-seconds - probably need to expose in KPP
+
+Dim tempFile As String
+Const UNITNUMBER = "^^#"
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+
+
+Dim NT As Object
+Dim OBJ As Object
+Const NL = chr$(10)	 			' newline
+Const CR = chr$(13)	 			' carriage return
+Private MachFailCount() As Integer			'Array to hold how many time machine is not found
+Private MachClearCount() As Integer			'Array to hold how many time a Machine is found
+Private MachEventFired() As Boolean			'Array to hold whether an event for this machine has occurred
+Dim RegConnectRet As Long
+
+
+'Constants for values that are returned from the Ping Function
+'these represent the status that ping returns
+Const IP_STATUS_BASE = 11000
+Const IP_SUCCESS = 0
+Const IP_BUF_TOO_SMALL = (11000 + 1)
+Const IP_DEST_NET_UNREACHABLE = (11000 + 2)
+Const IP_DEST_HOST_UNREACHABLE = (11000 + 3)
+Const IP_DEST_PROT_UNREACHABLE = (11000 + 4)
+Const IP_DEST_PORT_UNREACHABLE = (11000 + 5)
+Const IP_NO_RESOURCES = (11000 + 6)
+Const IP_BAD_OPTION = (11000 + 7)
+Const IP_HW_ERROR = (11000 + 8)
+Const IP_PACKET_TOO_BIG = (11000 + 9)
+Const IP_REQ_TIMED_OUT = (11000 + 10)
+Const IP_BAD_REQ = (11000 + 11)
+Const IP_BAD_ROUTE = (11000 + 12)
+Const IP_TTL_EXPIRED_TRANSIT = (11000 + 13)
+Const IP_TTL_EXPIRED_REASSEM = (11000 + 14)
+Const IP_PARAM_PROBLEM = (11000 + 15)
+Const IP_SOURCE_QUENCH = (11000 + 16)
+Const IP_OPTION_TOO_BIG = (11000 + 17)
+Const IP_BAD_DESTINATION = (11000 + 18)
+Const IP_ADDR_DELETED = (11000 + 19)
+Const IP_SPEC_MTU_CHANGE = (11000 + 20)
+Const IP_MTU_CHANGE = (11000 + 21)
+Const IP_UNLOAD = (11000 + 22)
+Const IP_ADDR_ADDED = (11000 + 23)
+Const IP_GENERAL_FAILURE = (11000 + 50)
+Const MAX_IP_STATUS = 11000 + 50
+Const IP_PENDING = (11000 + 255)
+Const PING_TIMEOUT = 200
+Const REG_SZ    = 1
+Const REG_DWORD = 4                      ' 32-bit number
+Const HKEY_CLASSES_ROOT = &H80000000 
+Const HKEY_CURRENT_USER = &H80000001 
+Const HKEY_LOCAL_MACHINE = &H80000002 
+Const HKEY_USERS = &H80000003 
+Const ERROR_NONE = 0 
+Const ERROR_BADDB = 1 
+Const ERROR_BADKEY = 2 
+Const ERROR_CANTOPEN = 3 
+Const ERROR_CANTREAD = 4 
+Const ERROR_CANTWRITE = 5 
+Const ERROR_OUTOFMEMORY = 6 
+Const ERROR_INVALID_PARAMETER = 7 
+Const ERROR_ACCESS_DENIED = 8 
+Const ERROR_INVALID_PARAMETERS = 87 
+Const ERROR_NO_MORE_ITEMS = 259 
+Const KEY_ALL_ACCESS = &H3F 
+Const KEY_READ       = &H19
+
+
+Const MAX_WSADescription = 256
+Const MAX_WSASYSStatus = 128
+
+Const WS_VERSION_REQD = &H101
+Const WS_VERSION_MAJOR = WS_VERSION_REQD \ &H100 And &HFF&
+Const WS_VERSION_MINOR = WS_VERSION_REQD And &HFF&
+Const MIN_SOCKETS_REQD = 1
+Const SOCKET_ERROR = -1
+Const WSADescription_Len = 256
+Const WSASYS_Status_Len = 128
+
+
+
+'Type structure for Ping options
+Type ICMP_OPTIONS
+    Ttl             As String *1
+    Tos             As String *1
+    Flags           As String *1
+    OptionsSize     As String *1
+    OptionsData     As Long
+End Type
+
+
+'Structure fro holding Ping Reply/Status
+Type ICMP_ECHO_REPLY
+    Address         As Long
+    status          As Long
+    RoundTripTime   As Long
+    DataSize        As Integer
+    Reserved        As Integer
+    DataPointer     As Long
+    Options         As ICMP_OPTIONS
+    Data            As String * 30
+End Type
+
+
+
+'Type Structure for holding WinSock Info
+
+ Type WSADATA
+
+
+       wversion As Integer
+       wHighVersion As Integer
+       szDescription(0 To WSADescription_Len) As String * 1
+       szSystemStatus(0 To WSASYS_Status_Len) As String * 1
+       iMaxSockets As Integer
+       iMaxUdpDg As Integer
+       lpszVendorInfo As Long
+
+End Type
+
+
+'Type Structure for holding Ping Info
+ Type HOSTENT
+
+
+       hName As Long
+       hAliases As Long
+       hAddrType As Integer
+       hLength As Integer
+       hAddrList As Long
+
+End Type
+
+Type Inet_address           ' IP Address in Network Order
+    Byte4 As String * 1     '
+    Byte3 As String * 1     '
+    Byte2 As String * 1     '
+    Byte1 As String * 1     '
+End Type
+
+Type Ping_responses
+	ResponseCount As Integer
+	ResponseCode As Long
+	ResponseStr As String
+	ResponseTime As Long 
+End Type
+
+
+'Function for creating IP Connection 
+Declare Function IcmpCreateFile Lib "icmp.dll" () As Long
+
+'Function for Closing IP Connection 
+Declare Function IcmpCloseHandle Lib "icmp.dll" _
+   (ByVal IcmpHandle As Long) As Long
+   
+'Function for Sending Ping request
+ Declare Function IcmpSendEcho Lib "icmp.dll" _
+   (ByVal IcmpHandle As Long, _
+    ByVal DestinationAddress As Long, _
+    ByVal RequestData As String, _
+    ByVal RequestSize As Integer, _
+    ByVal RequestOptions As Long, _
+    ReplyBuffer As ICMP_ECHO_REPLY, _
+    ByVal ReplySize As Long,_
+    ByVal Timeout As Long) As Long
+
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+
+Declare Function WSAGetLastError Lib "WSOCK32.DLL" () As Long
+Declare Function WSAStartup Lib "WSOCK32.DLL" (ByVal wVersionRequired&, lpWSAData As WSADATA) As Long
+Declare Function WSACleanup Lib "WSOCK32.DLL" () As Long
+Declare Function gethostname Lib "WSOCK32.DLL" (ByVal Hostname$, HostLen&) As Long
+Declare Function gethostbyname Lib "WSOCK32.DLL" (ByVal Hostname$) As Long
+
+Declare Sub CopyMemoryD Lib "kernel32" Alias "RtlMoveMemory" (lpvDest As Any, lpvSource As Any, ByVal cbCopy As Long)
+
+Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Dest As Any, Src As Any, ByVal cb As Long)
+Declare Sub RtlMoveMemory Lib "kernel32" (hpvDest As Any, ByVal hpvSource&, ByVal cbCopy&)
+ 
+Declare Function RegConnectRegistry Lib "advapi32.dll" Alias "RegConnectRegistryA" (ByVal lpMachineName As String, ByVal hKey As Long, phkResult As Long) As Long
+Declare Function RegCloseKey Lib "advapi32.dll" Alias "RegCloseKey" (ByVal hKey As Long) As Long
+
+Declare Function CloseHandle Lib "kernel32.dll" Alias _
+	    "CloseHandle" (ByVal hObject As Long) As Long
+
+Declare Function RegOpenKeyEx Lib "advapi32.dll" Alias _ 
+		"RegOpenKeyExA" (ByVal hKey As Long, ByVal lpSubKey As String, _ 
+		ByVal ulOptions As Long, ByVal samDesired As Long, ByRef phkResult As Long) As Long 
+
+Declare Function RegQueryValueExString Lib "advapi32.dll" Alias _ 
+		"RegQueryValueExA" (ByVal hKey As Long, ByVal lpValueName As _ 
+		String, ByVal lpReserved As Long, lpType As Long, ByVal lpData _
+		As String, lpcbData As Long) As Long 
+
+
+
+
+Function GetAccountDetails(machname As String) As String
+	On Error GoTo GetAccountDetails_Error
+	Dim lRetVal&, hKey&, ValLen&, DataName$,DataName2$, DataLen&, rc&
+	Dim Reg_Log As String
+	Dim netiqmcdet As String 
+	Dim netiqccmdet As String 
+	Dim PKResult As Long
+	Dim RegReturn As Long
+	If DO_DEBUG  = "y" Then	
+		Print #2 , Now() & "        " & "Procedure :  GetAccountDetails"
+		Print #2 , Now() & "        " & "Connecting to registry on machine : " & machname & "."
+	End If	
+
+
+	RegReturn= RegConnectRegistry("\\"& trim$(machname),HKEY_LOCAL_MACHINE,PKResult)
+	If (RegReturn <> ERROR_NONE) Then
+		If DO_DEBUG  = "y" Then
+			Print #7,  trim(machname) & ",Error Opening Registry Key,Error Opening Registry Key"
+			Print #2 , Now() & "        " & "Error opening remote Registry key, Return code : " & RegReturn
+		End If
+		GoTo GetAccountDetails_Exit
+	End If
+
+	Reg_Log =  "SYSTEM\CurrentControlSet\Services\NetIQmc"
+
+	lRetVal = RegOpenKeyEx(PKResult, Reg_Log, 0, KEY_READ, hKey)
+	If (lRetVal <> ERROR_NONE) Then
+		If DO_DEBUG  = "y" Then
+			Print #7,  trim(machname) & ",Error Opening Registry Key,Error Opening Registry Key"
+			Print #2 , Now() & "        " & "Error opening Registry key, Return Code " & lRetVal
+		End If
+		GoTo GetAccountDetails_Exit
+	End If
+	DataLen = 256
+	DataName = String$(DataLen, 0)	  
+	lRetVal = RegQueryValueExString(hKey, "ObjectName", 0&, REG_SZ, DataName, DataLen)
+	If (lRetVal <> ERROR_NONE) Then
+		If DO_DEBUG  = "y" Then
+			Print #7,  trim(machname) & ",Error Opening Registry Key,Error Opening Registry Key"
+			Print #2 , Now() & "        " & "Error reading Object Login Details for mc"
+		End If
+		GoTo GetAccountDetails_Exit
+	End If
+	DataName = Left$(DataName, DataLen-1)
+	DataName = Trim$(DataName)
+
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Login Details from Registry for mc: " & DataName
+	End If
+	netiqmcdet = DataName
+	GetAccountDetails = netiqmcdet
+	lRetVal = RegCloseKey (hKey)
+	lRetVal = RegCloseKey (PKResult)
+
+	GoTo GetAccountDetails_Exit
+	
+	
+
+GetAccountDetails_Error:
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error in log file name procedure"
+		Close #2
+	End If
+	MCAbort "", "Can't find the log file name in the registry."	
+	lRetVal = RegCloseKey (hKey)
+	GetAccountDetails = ""
+GetAccountDetails_Exit:
+
+End Function
+
+
+  
+Function resolveIPAddress(tmpname As String) As String
+   Dim Hostname As String * 256
+   Dim hostent_addr As Long
+   Dim host As HOSTENT
+   Dim hostip_addr As Long
+   Dim temp_ip_address() As Integer
+   Dim i As Integer
+   Dim ip_address As String
+   Dim Hostname1 As String * 256
+   Dim ip_addresstmp As String
+   
+   Dim p&
+   Dim pp&
+   Dim machlen As Integer
+   
+   Dim ppp&
+       
+
+	Hostname1 = tmpname & Chr(0)
+
+    hostent_addr = gethostbyname(Hostname1)
+
+    If hostent_addr = 0 Then
+
+		resolveIPAddress = -2
+
+        Exit Function
+    End If
+
+       
+    RtlMoveMemory host, hostent_addr, LenB(host)
+    RtlMoveMemory hostip_addr, host.hAddrList, 4
+
+    ReDim temp_ip_address(1 To 4)
+    pp = host.hAddrList       'the the pointer to the IPs pointers list of the host
+    RtlMoveMemory p,  pp, 4    'get the first pointer of the List
+
+    While p > 0   'is p a nonzero (not NULL) pointer? if yes we have avalid IP
+		RtlMoveMemory temp_ip_address(1), p, 1
+        RtlMoveMemory temp_ip_address(2), p + 1, 1
+        RtlMoveMemory temp_ip_address(3), p + 2, 1
+        RtlMoveMemory temp_ip_address(4), p + 3, 1
+        ip_addresstmp = CStr(temp_ip_address(1)) + "." + CStr(temp_ip_address(2)) + "." + CStr(temp_ip_address(3)) + "." + CStr(temp_ip_address(4))
+
+
+        pp = pp + 4   'look for next IP adding 4 to the List pointer
+        RtlMoveMemory p,  pp, 4  'get the new pointer to the next IP and go again
+    Wend
+
+   resolveIPAddress = ip_addresstmp
+
+End Function
+
+
+'Function to translate IP Return Status from Numeric to String information
+Public Function GetStatusCode(status As Long) As String
+
+   Dim msg1 As String
+
+   Select Case status
+	  Case IP_SUCCESS
+        msg1 = "Successfully Pinged Machine"
+      Case IP_BUF_TOO_SMALL
+        msg1 = "ip buf too_small"
+      Case IP_DEST_NET_UNREACHABLE
+		msg1 = "ip dest net unreachable"
+      Case IP_DEST_HOST_UNREACHABLE 
+		msg1 = "ip dest host unreachable"
+      Case IP_DEST_PROT_UNREACHABLE 
+		msg1 = "ip dest prot unreachable"
+      Case IP_DEST_PORT_UNREACHABLE 
+		msg1 = "ip dest port unreachable"
+      Case IP_NO_RESOURCES          
+		msg1 = "ip no resources"
+      Case IP_BAD_OPTION		
+      	msg1 = "ip bad option"
+      Case IP_HW_ERROR
+      	msg1 = "ip hw_error"
+      Case IP_PACKET_TOO_BIG        
+		msg1 = "ip packet too_big"
+      Case IP_REQ_TIMED_OUT         
+		msg1 = "ip req timed out"
+      Case IP_BAD_REQ	               
+		msg1 = "ip bad req"
+      Case IP_BAD_ROUTE             
+		msg1 = "ip bad route"
+      Case IP_TTL_EXPIRED_TRANSIT   
+		msg1 = "ip ttl expired transit"
+      Case IP_TTL_EXPIRED_REASSEM   
+		msg1 = "ip ttl expired reassem"
+      Case IP_PARAM_PROBLEM         
+		msg1 = "ip param_problem"
+      Case IP_SOURCE_QUENCH         
+		msg1 = "ip source quench"
+      Case IP_OPTION_TOO_BIG        
+		msg1 = "ip option too_big"
+      Case IP_BAD_DESTINATION       
+		msg1 = "ip bad destination"
+      Case IP_ADDR_DELETED          
+		msg1 = "ip addr deleted"
+      Case IP_SPEC_MTU_CHANGE       
+		msg1 = "ip spec mtu change"
+      Case IP_MTU_CHANGE            
+		msg1 = "ip mtu_change"
+      Case IP_UNLOAD                
+		msg1 = "ip unload"
+      Case IP_ADDR_ADDED            
+		msg1 = "ip addr added"
+      Case IP_GENERAL_FAILURE       
+		msg1 = "ip general failure"
+      Case IP_PENDING               
+		msg1 = "ip pending"
+      Case PING_TIMEOUT             
+		msg1 = "ping timeout"
+      Case Else
+		msg1 = "unknown  msg returned"
+   End Select
+   
+   GetStatusCode = CStr(status) & "   [ " & msg1 & " ]"
+   
+End Function
+
+'Function used by Ping to return most siginificant byte
+Public Function HiByte(ByVal wParam As Integer)
+
+    HiByte = wParam \ &H100 And &HFF&
+
+End Function
+
+'Function used by Ping to return Least siginificant byte
+Public Function LoByte(ByVal wParam As Integer)
+
+    LoByte = wParam And &HFF&
+
+End Function
+
+'Function to ping machine accross network
+Public Function Ping(szAddress As String, ECHO As ICMP_ECHO_REPLY) As Long
+
+   Dim hPort As Long
+   Dim dwAddress As Long
+   Dim sDataToSend As String
+   Dim iOpt As Long
+	Dim closehandle As Long
+	Dim echoresponse As Long
+   
+   sDataToSend = "Echo This"
+   dwAddress = AddressStringToLong(szAddress) 'Check if IP address is valid
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & ".....Checking Ping Functionality"
+		Print #2 , Now() & "        " & ".....		Converting IPAddress to Long"
+		Print #2 , Now() & "        " & ".....		Long = " & dwAddress
+	End If
+   
+   hPort = IcmpCreateFile() 'Create IP Connection
+
+
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & ".....		IP Port Connection = " & hPort
+	End If
+'Send Ping request across network   
+echoresponse = IcmpSendEcho(hPort, _
+                   dwAddress, _
+                   sDataToSend, _
+                   Len(sDataToSend), _
+                   0, _
+                   ECHO, _
+                   Len(ECHO), _
+                   WaitTime) 
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & ".....		IP Response = " & echoresponse
+End If
+
+If echoresponse = true Then
+        'the ping succeeded,
+        '.Status will be 0
+        '.RoundTripTime is the time in ms for
+        '               the ping to complete,
+        '.Data is the data returned (NULL terminated)
+        '.Address is the Ip address that actually replied
+        '.DataSize is the size of the string in .Data
+	Ping = ECHO.RoundTripTime
+Else
+	Ping = ECHO.status * -1
+End If
+
+'Close IP Connection                       
+   closehandle = IcmpCloseHandle(hPort)
+
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & ".....		Checking results"
+		Print #2 , Now() & "        " & ".....		ECHO.Status 		= " & ECHO.Status
+		Print #2 , Now() & "        " & ".....		ECHO.RoundTripTime 	= " & ECHO.RoundTripTime
+		Print #2 , Now() & "        " & ".....		ECHO.DataSize 		= " & ECHO.DataSize
+		Print #2 , Now() & "        " & ".....		ECHO.DataPointer 	= " & ECHO.DataPointer
+		Print #2 , Now() & "        " & ".....		ECHO.Data 			= " & ECHO.Data
+		Print #2 , Now() & "        " & ".....		Close IP Handle 	= " & closehandle
+	End If
+
+   
+End Function
+   
+'Function to Check if IP address is valid
+Public Function AddressStringToLong( tmp As String) As Long
+
+   Dim i As Integer
+   Dim parts(1 To 4) As String
+   
+   i = 0
+   
+  'we have to extract each part of the
+  '123.456.789.123 string, delimited by
+  'a period
+   While InStr(tmp, ".") > 0
+      i = i + 1
+      parts(i) = Mid(tmp, 1, InStr(tmp, ".") - 1)
+      tmp = Mid(tmp, InStr(tmp, ".") + 1)
+   Wend
+   
+   i = i + 1
+   parts(i) = tmp
+   
+   If i <> 4 Then
+      AddressStringToLong = 0
+      Exit Function
+   End If
+   
+  'build the long value out of the
+  'hex of the extracted strings
+   AddressStringToLong = Val("&H" & Right("00" & Hex(parts(4)), 2) & _
+                         Right("00" & Hex(parts(3)), 2) & _
+                         Right("00" & Hex(parts(2)), 2) & _
+                         Right("00" & Hex(parts(1)), 2))
+   
+End Function
+
+
+'Function to close Winsock connections
+Sub SocketsCleanup()
+   Dim lReturn As Long
+
+       lReturn = WSACleanup()
+
+       If lReturn <> 0 Then
+           'MsgBox "Socket error " & Trim$(Str$(lReturn)) & " occurred in Cleanup "
+           End
+       End If
+
+   End Sub
+
+'Function to Check Versions of Winsock interface
+Function SocketsInitialize() As Integer
+   Dim WSAD As WSADATA
+   Dim iReturn As Integer
+   Dim sLowByte As String, sHighByte As String, sMsg As String
+
+       iReturn = WSAStartup(WS_VERSION_REQD, WSAD)
+       SocketsInitialize = 0
+       If iReturn <> 0 Then
+           'MsgBox "Winsock.dll is not responding."
+			SocketsInitialize = -1
+           Exit Function
+       End If
+
+       If lobyte(WSAD.wversion) < WS_VERSION_MAJOR Or (lobyte(WSAD.wversion) = WS_VERSION_MAJOR And hibyte(WSAD.wversion) < WS_VERSION_MINOR) Then
+           sHighByte = Trim$(Str$(hibyte(WSAD.wversion)))
+           sLowByte = Trim$(Str$(lobyte(WSAD.wversion)))
+           sMsg = "Windows Sockets version " & sLowByte & "." & sHighByte
+           sMsg = sMsg & " is not supported by winsock.dll "
+			SocketsInitialize = -2
+           Exit Function
+       End If
+
+       If WSAD.iMaxSockets < MIN_SOCKETS_REQD Then
+           sMsg = "This application requires a minimum of "
+           sMsg = sMsg & Trim$(Str$(MIN_SOCKETS_REQD)) & " supported   sockets."
+			SocketsInitialize = -3
+           Exit Function
+       End If
+
+
+
+End Function
+
+
+'Function to start Winsock Interface
+Public Sub InitWinsock()
+
+Dim wsaDat As WSADATA
+Dim lReturn  As Long
+
+' &H101 is asking for a minimum version of Winsock 1.1
+lReturn = WSAStartup(&H101, wsaDat)
+
+End Sub
+
+'Function to spaces in Short message (this is used for Command Post, as it cannot resolve with spaces)
+Function AlterString(ByRef sString As String, ByRef sCharToReplace As String, ByRef sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+
+
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+
+Sub Main()
+	On Error GoTo main_error
+	If Iterationcount() =1 Then	
+		Openfilefail = false
+	End If
+
+	Dim RegReturn As Long
+	Dim RegCloseRes As Long
+	Dim PKResult As Long
+	
+	Dim Machname As String
+	Dim detailmsg As String
+	Dim RetVal As Double
+	Dim NumMach As Integer
+	Dim eventmsg As String
+	Dim createret As Integer
+	Dim RegistryConnect As Boolean
+	Dim pingsuccess As Boolean
+	Dim socketret As Integer
+	Dim resname As String
+	Dim longm As String
+	resname = "NT_MachineFolder = " & NT_MachineFolder	
+	Set NT = CreateObject("NetiQAgent.NT")	'Create OLE Object
+	Set OBJ = NT.System						'Define Sub section
+ 
+	If iterationcount() =1 Then
+		'Check Local MC, if running as local system then exit
+
+		AccountName = GetAccountDetails(NT_MachineFolder)
+		If AccountName = "" Then
+			detailmsg = detailmsg & Chr$(10) & "Failed to retrive account that local MC"
+			detailmsg = detailmsg & Chr$(10) & "Service is using, cannot continue"
+			EventMsg = Machname & "SCRIPT ERROR NULL"
+			MSActions AccessSeverity, EventMsg, AKPID, "NT_MachineFolder = " & Machname, detailmsg
+			mcabort resname,"Failed to retrive local MC Account info"
+			Exit Sub
+		ElseIf AccountName = "LocalSystem" Then
+			detailmsg = detailmsg & Chr$(10) & "Local MC Service is logging in using a LocalSystem"
+			detailmsg = detailmsg & Chr$(10) & "Account, this prevents any remote monitoring"
+			detailmsg = detailmsg & Chr$(10) & "This script will not execute until the MC is configured"
+			detailmsg = detailmsg & Chr$(10) & "to login using a domain account, that has permissions"
+			detailmsg = detailmsg & Chr$(10) & "to open the registry on the remote machines"
+			EventMsg = Machname & "SCRIPT ERROR NULL"
+			MSActions AccessSeverity, EventMsg, AKPID, "NT_MachineFolder = " & Machname, detailmsg
+			mcabort resname,"local MC Running as localsystem"
+			Exit Sub
+		End If
+
+    	Dim NameSize As Long
+	    Dim X As Long
+		Dim Machinename1 As String
+		Dim y As Integer
+    	MachineName1 = Space$(16)
+	    NameSize = Len(MachineName1)
+    	X = GetComputerName(Machinename1,NameSize)
+		For y = 1 To Len(Machinename1)
+			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+			End If
+		Next y
+		Machinenamestr = lcase(trim(Machinenamestr))
+	End If
+
+	DO_DEBUG = DEBUG
+
+	If DO_DEBUG  = "y" Then
+		If iterationcount() =1 Then
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		KSName=	"NT_SSIMachineDown" & str(getjobid())
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+		'Open Debug File
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		If Openfilefail = true And DO_DEBUG = DEBUG Then 
+			eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+			longm = "Openned debug file " &  chr$(10) 
+			longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+			MSActions NormSeverity,eventmsg , AKPID, resname, longm
+			Openfilefail = false
+			Print #2 , Now() & "        " & "*********Restart Debugging*********"
+		End If
+	End If
+	
+	'Check if any machines have been specified, if no machines the Script has nothing to process
+	If MachineList = "" Then
+		'Write Debug info
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " &  "No Machines in list"
+			Close #2
+		End If
+
+		Err.Description = "Empty MachineList"
+		Err.raise 4002	' Bad Input Value, terminate
+	End If
+
+	If PingRetriesParm = 0 Then
+		PingRetries = 1 
+	Else
+		PingRetries = PingRetriesParm
+	End If
+
+	'Get Number of machines to process
+	NumMach = ItemCount(MachineList, ",")
+	
+	'Redim all the arrays for the new number of machines
+	ReDim Preserve MachFailCount(1 To NumMach)
+	ReDim Preserve MachClearCount(1 To NumMach)
+	ReDim Preserve MachEventFired(1 To NumMach) 
+	
+	'Write Debug info if the first iteration of script
+	If iterationcount() =1 Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Number of machines to check  : " & ItemCount(MachineList, ",")
+			Print #2 , Now() & "        " & "......Machine(s) to check 		: " & MachineList
+		End If
+	End If
+
+	'Process each machine individually
+	For I = 1 To ItemCount(MachineList, ",")
+
+		Machname = Item$(MachineList, I,, ",")	'Get Machine Name
+		Detailmsg = ""
+		'If first iteration then the array elements need to be initialised.
+		If IterationCount() = 1 Then
+			'Write Debug info
+			If DO_DATA = "y" Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & "Set up Data Header"
+					Print #2 , Now() & "        " & " "
+				End If
+				'Create Graph streams
+				DataHeader "MachineDown " & Machname & UNITNUMBER, 0, I
+			End If
+
+			MachEventFired(I) = false
+			MachClearCount(I) = 0
+			MachFailCount(I) = 0
+		End If
+		
+		'Write Debug info
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Check Machine 	: " & Machname
+		End If
+
+		RegistryConnect = false	'Used to store whether the Registry could be connected
+		PingConnect=false		'Used to store whether the Ping incurred a network error
+		PingSuccess = false		'Used to store whether the machine was Up/Down
+		
+		Dim pingret As String
+		Dim MachineIPAddress As String
+
+	
+		Dim pos As Integer
+		MachineIPAddress=""
+		'Get IP address of the Machine to check
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & ".....Starting Initializing Winsock interface"
+		End If
+			socketret = SocketsInitialize
+			If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & ".....Finished Initializing Winsock interface"
+		End If
+			If Socketret <>  0 Then
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....Winsock Initialisation Error (Code " & cstr(Socketret) & ")"
+				Print #2 , Now() & "        " & " "
+			End If
+				MSActions 1, "Winsock Initialisation Error (Code " & cstr(Socketret) & ")", AKPID, "NT_MachineFolder = " & Machname, detailmsg
+			Err.Description = "Winsock Initialisation Error (Code " & cstr(Socketret) & ")"
+			Err.raise 4002	' Bad Input Value, terminate
+		End If
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & ".....Starting to Resolve Machine IP Address"
+			Print #2 , Now() & "        " & " "
+		End If
+			MachineIPAddress = resolveIPAddress(trim(Machname))
+			If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & ".....Starting to Resolve Machine IP Address"
+			Print #2 , Now() & "        " & " "
+		End If
+				'MachineIPAddress = ResolveToIPAddress(Machname)
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & ".....Resolving IP Address for Machine , " & Machname & " IP Returned " & MachineIPAddress
+			Print #2 , Now() & "        " & " "
+		End If
+
+		'Check if IP address could be resolved, the function should not return "0.0.0.0" but in some 
+		'circumstances this is the incorrect return value.
+		If MachineIPAddress ="-2"  Then
+			Detailmsg= Detailmsg & "Failed To resolve HostName Specified Before Pinging"  & CR & NL 
+			PingConnect=false
+			PingSuccess = false
+			PingRet= "Failed To resolve HostName Specified Before Pinging"
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....Could Not resolve IP Address for Machine , " & Machname & " ,before pinging" 
+				Print #2 , Now() & "        " & " "
+			End If
+		'If a Windsock Error Occured
+		ElseIf MachineIPAddress="0.0.0.0"	Then 
+			Detailmsg= Detailmsg & "Failed to resolve Hostname, IP Address Returned 0.0.0.0"  & CR & NL 
+			PingConnect=false
+			PingSuccess = false
+			PingRet= "Failed to resolve Hostname, IP Address Returned 0.0.0.0"
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....Failed to resolve Hostname, IP Address Returned 0.0.0.0 for machine, " & Machname & " ,before pinging" 
+				Print #2 , Now() & "        " & " "
+			End If
+		Else
+			'If IP resolution worked then try to ping the machine
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....IP Address Returned for machine " & Machname  & " is " & MachineIPAddress
+				Print #2 , Now() & "        " & " "
+			End If
+
+			Dim PingResponses() As Ping_responses
+
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....Now Trying to Ping Machine " & PingRetries & " Time(s)"
+			End If
+			'Copying of IP Adress occurs as the IP address get Truncated after the Ping call, so all others fail
+			tmpipaddress = MachineIPAddress
+			For PingTryCount = 1 To PingRetries
+				socketret = SocketsInitialize
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & ".....			Ping attempt " & PingTryCount
+					Print #2 , Now() & "        " & ".....			Pinging machine " & tmpipaddress
+				End If
+				Dim ECHO As ICMP_ECHO_REPLY
+				MachineIPAddress = tmpipaddress
+			 	ret= Ping(MachineIPAddress, ECHO)
+				PingRet = GetStatusCode(ECHO.status)
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & ".....				Ping Response : " & PingRet
+						Print #2 , Now() & "        " & ".....				Ping Status   : " & ECHO.status
+						Print #2 , Now() & "        " & ".....				RoundTrip Time   : " & ECHO.RoundTripTime
+					End If
+
+
+					If arraydims(PingResponses()) <> 0 Then
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & ".....				Checking previous attempts"
+							Print #2 , Now() & "        " & ".....				PingRespones Array has elements"
+						End If
+						ResponseNotFound = true
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & ".....				Cycling through Response elements"
+							Print #2 , Now() & "        " & ".....				from 0 to " & ubound(PingResponses())
+						End If
+						For ResponseCycle = 0 To (ubound(PingResponses()))
+							If DO_DEBUG  = "y" Then
+								Print #2 , Now() & "        " & ".....				Checkin element " & ResponseCycle & " in Pingresponses array"
+							End If
+							If PingResponses(ResponseCycle).ResponseCode = ECHO.status Then
+								If DO_DEBUG  = "y" Then
+									Print #2 , Now() & "        " & ".....				Same Response already happened"
+									Print #2 , Now() & "        " & ".....					Increment element " & ResponseCycle
+								End If
+								ResponseNotFound = false
+								PingResponses(ResponseCycle).ResponseCount = PingResponses(ResponseCycle).ResponseCount + 1
+								PingResponses(ResponseCycle).ResponseTime = fix((PingResponses(ResponseCycle).ResponseTime + ECHO.RoundTripTime)/PingResponses(ResponseCycle).ResponseCount)
+								Exit For
+							Else
+								ResponseNotFound = true							
+							End If
+						Next ResponseCycle
+						If ResponseNotFound = true Then
+							If DO_DEBUG  = "y" Then
+								Print #2 , Now() & "        " & ".....				Number of elements in PingResponses are " & ubound(PingResponses()) + 1 & " before adding new"
+							End If
+							lastelement = ubound(PingResponses()) + 1
+							ReDim Preserve PingResponses(lastelement)
+							PingResponses(lastelement).ResponseCount = 1
+							PingResponses(lastelement).ResponseCode = ECHO.status
+							PingResponses(lastelement).ResponseStr = PingRet
+							PingResponses(lastelement).ResponseTime = ECHO.RoundTripTime
+							If DO_DEBUG  = "y" Then
+								Print #2 , Now() & "        " & ".....				First Time this response has occured"
+								Print #2 , Now() & "        " & ".....					Increment element " & lastelement
+								Print #2 , Now() & "        " & ".....					Number of elements in PingResponses are " & ubound(PingResponses()) + 1 & " after adding new"
+							End If
+						End If
+					Else
+						ReDim PingResponses(0) 
+						PingResponses(0).ResponseCount = 1
+						PingResponses(0).ResponseCode = ECHO.status
+						PingResponses(0).ResponseStr = PingRet
+						PingResponses(0).ResponseTime = ECHO.RoundTripTime
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & ".....				Number of elements in PingResponses are " & ubound(PingResponses()) + 1 & " after adding new"
+							Print #2 , Now() & "        " & ".....				First Response For Ping"
+						End If
+					End If
+				SocketsCleanup
+			Next PingTryCount
+
+
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....Final Ping results"
+				For PingTryCount = 0 To (ubound(PingResponses()))
+					Print #2 , Now() & "        " & ".....				Response : " & PingResponses(PingTryCount).ResponseStr & " Has occured " & PingResponses(PingTryCount).ResponseCount & " Time(s)"
+				Next
+			End If
+
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....Build up DetailMsg, etc"
+			End If
+			' Set These to false and they will stay that way unless one of the conditions below change them
+			PingConnect=false
+			PingSuccess = false
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....Cycling through finshed Ping Responses From element 0 to element " & ubound(PingResponses())
+			End If
+			
+			For PingTryCount = 0 To (ubound(PingResponses()))
+					'Get Ping return status and try to work out what happened
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & ".....		element 	  " & PingTryCount
+					Print #2 , Now() & "        " & ".....		Responce Code " & PingResponses(PingTryCount).ResponseCode
+				End If
+				Detailmsg="Step 1:" & CR & NL
+				Select Case PingResponses(PingTryCount).ResponseCode
+					Case IP_REQ_TIMED_OUT 
+						Detailmsg= Detailmsg & "Ping failed with message	: " & "ip req timed out" & CR & NL & "Request May have timed out due to slow link" & CR & NL
+						PingConnect=true
+					Case IP_SUCCESS 
+						Detailmsg= Detailmsg & "Ping Succeded	: " & "ip success" & CR & NL & "Machine Up, Response recieved from PING" & CR & NL
+						Detailmsg= Detailmsg & Chr(10) & "Average Response Time from this server is " & PingResponses(PingTryCount).ResponseTime & "ms" & CR & NL
+						PingConnect=True
+						PingSuccess = True	
+					Case IP_SOURCE_QUENCH 
+						Detailmsg= Detailmsg & "Ping failed with message	: " & "ip source quench" & CR & NL & " Possibly a Router Problem "
+					Case IP_TTL_EXPIRED_TRANSIT 
+						Detailmsg= Detailmsg & "Ping failed with message	: " & "ip ttl expired transit" & CR & NL & " Possibly a Router Problem "
+					Case IP_DEST_HOST_UNREACHABLE 
+						Detailmsg= Detailmsg & "Ping failed with message	: " & "ip dest host unreachable" & CR & NL & " Possibly a Router Problem "
+					Case IP_BAD_DESTINATION 
+						Detailmsg= Detailmsg & "Ping failed with message	: " & "ip bad destination" & CR & NL & " Possibly a WINS Problem "
+					Case Else
+						Detailmsg= Detailmsg & "Ping failed with message	: " & PingResponses(PingTryCount).ResponseStr & CR & NL 
+				End Select
+			Next
+		End If
+		Detailmsg = Detailmsg & "Step 2:" & CR & NL					
+		If PingConnect=true And PingSuccess = true Then
+			RegConnectRet = RegConnectRegistry("\\"& trim$(Machname),HKEY_LOCAL_MACHINE,PKResult)
+			If  RegConnectRet <> 0  Then
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & ".....Reg Connect returned " & RegConnectRet
+				End If
+
+				RegistryConnect	= false
+			Else
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & DetailMsg
+				End If
+			
+				RegistryConnect	= true
+				Detailmsg = "Successfully connected to registry of machine " & Machname 
+				RegCloseRes = RegCloseKey(PKResult)
+			End If
+		End If
+
+		'Chedck if the Ping worked or the Registry could be contacted
+		If RegistryConnect = true  Then
+			'set up graph data.
+			RetVal = DATA_UPVALUE
+
+			'This section means that the machine could be contacted.
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....Results after Ping and Registry Connect"
+				Print #2 , Now() & "        " & ".....Machine  : " & Machname & " Connected to"
+				Print #2 , Now() & "        " & ".....		RegistryConnect	: " & RegistryConnect
+				Print #2 , Now() & "        " & ".....		PingConnect	: " & PingConnect
+				Print #2 , Now() & "        " & ".....		PingSuccess	: " & PingSuccess
+				Print #2 , Now() & "        " & " "
+			End If
+
+			'Reset the Fail count as the machine has been seen.
+			'If this is not reset the failure event may fire a time other than when 
+			'another "n" failures have occured.
+			MachFailCount(I)=0
+			'Increase number of times the machine has been contacted.
+			MachClearCount(I) = MachClearCount(I) + 1
+
+			'Check if machine has been contacted enough times to establish that it is alright.
+			'This will vary with different servers and that is the the purpose of the "n" CONSEC_TIME's.
+			'The auto clear message will only be sent is a fail event has previously been sent, this
+			'prevents an auto clear event being fired when the machine are found the first time a script is run.
+			If MachClearCount(I) = CONSEC_TIME And MachEventFired(I) = True Then
+				'Write Debug info
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & ".....Machine Clear Count : " &  MachClearCount(I) & " and EventFired = True"
+					Print #2 , Now() & "        " & " "
+					Print #2 , Now() & "        " & ".....Machine is up and an event has been fired before"
+				End If
+
+				'Write Command post message
+				detailmsg = detailmsg & Chr$(10) & "Remote Registry could be connected to"
+				detailmsg = detailmsg & Chr$(10) & "and Ping has recieved response, So Server has now been restored"
+				EventMsg = Machname & " SERVER RESTORED NULL"
+				'Fire Event
+				If SEND_NORMAL = "y" Then
+					If DO_DEBUG  = "y" Then  
+						Print #2, now() & "       " & "Send Auto Clear"	
+						Print #2 , Now() & "        " & "Sent Server RESTORED Event" 
+					End If
+					MSActions NormSeverity, eventmsg, AKPID, Machname, Detailmsg
+				Else
+					If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+						MSActions NormSeverity, eventmsg, AKPID, Machname, Detailmsg
+						If DO_DEBUG  = "y" Then 
+							Print #2, now() & "       " & "Action is Command Post so send Auto Clear anyway"	
+							Print #2, Now() & "       " & "Sent Server RESTORED Event" 
+						End If
+					Else
+						If DO_DEBUG  = "y" Then  
+							Print #2, now() & "       " & "Do Not Send Auto Clear"	
+						End If
+					End If
+				End If
+				'Reset the clear counter
+				MachClearCount(I) = 0
+				'clear the Eventfired flag, this stops more auto clear messages from being fired.
+				MachEventFired(I) = false
+			End If
+
+		'This section is if the Registry could not be contacted, the ping results are then important
+		ElseIf RegistryConnect = false  Then
+
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....Results after Ping and Registry Connect"
+				Print #2 , Now() & "        " & ".....Machine  : " & Machname & " not Connected to"
+				Print #2 , Now() & "        " & ".....		RegistryConnect	: " & RegistryConnect
+				Print #2 , Now() & "        " & ".....		PingConnect	: " & PingConnect
+				Print #2 , Now() & "        " & ".....		PingSuccess	: " & PingSuccess
+				Print #2 , Now() & "        " & ".....		RegConnectRet	: " & RegConnectRet
+				Print #2 , Now() & "        " & " "
+			End If
+
+			'Machine has failed to connect so the ClearCount will be 0
+			MachClearCount(I) = 0
+			'The Fail Count will increase to record number of connection failures
+			MachFailCount(I) = MachFailCount(I) + 1
+
+			'This is if the Ping worked but the machine did not respond
+			If pingconnect=true And pingsuccess=false Then
+				'Set up the Graph values
+				RetVal = DATA_DOWNVALUE		
+
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & ".....		Machine  : " & Machname & " not Pinged Successfully"
+					Print #2 , Now() & "        " & " "
+					Print #2 , Now() & "        " & ".....		Number of times this machine has failed = " & MachFailCount(I)
+					Print #2 , Now() & "        " & ".....		Consecutive times set to  = " & CONSEC_TIME
+				End If
+
+				'Box Down
+				'Check if the number of time the failure has occured is the same as the threshold set by the
+				'User, This allows for false messages.
+  				If MachFailCount(I) = CONSEC_TIME Then
+					'Write Debug info
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & ".....		CONSEC_TIMES = FailCount " 
+						Print #2 , Now() & "        " & ".....Machine Registry not connected to " &  MachFailCount(I) & " Time(s)"
+						Print #2 , Now() & "        " & " "
+						Print #2 , Now() & "        " & "Registry Connect not worked, No network Errors, but Ping Failed" 
+						Print #2 , Now() & "        " & "Sent Server DOWN Event" 
+					End If
+				
+					'Create message that is shown in the message tab in the NETIQ Console
+					'Create the Command post message
+					detailmsg = detailmsg & Chr$(10) & "Remote Registry could not be connected to"
+					detailmsg = detailmsg & Chr$(10) & "No network error Reported,"
+					detailmsg = detailmsg & Chr$(10) & "Ping has not recieved a response either."
+					detailmsg = detailmsg & Chr$(10) & "So Server is probably down"
+					EventMsg = Machname & " SERVER DOWN NULL"
+					'Fire Event
+					MSActions Severity, EventMsg, AKPID, _
+							"NT_MachineFolder = " & Machname, detailmsg
+					'Reset failure counter once event has fired.
+					MachFailCount(I)=0
+					'Record that the Event has fired, this allows the auto clear event to be fired.
+					MachEventFired(I) = True
+				Else
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & ".....		FailCount <> CONSEC Times so move on"
+					End If
+
+				End If
+			'this is if the Ping did work, we can assume that there is a problem with the server, as user
+			'will be unable to connect to it.
+			ElseIf pingconnect=true And PingSuccess = true Then
+				'Set up the Graph values
+				RetVal = DATA_ERRORVALUE
+
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & ".....Machine  : " & Machname & " Pinged Successfully"
+					Print #2 , Now() & "        " & " "
+					Print #2 , Now() & "        " & ".....		Number of times this machine has failed = " & MachFailCount(I)
+					Print #2 , Now() & "        " & ".....		Consecutive times set to  = " & CONSEC_TIME
+				End If
+
+				'Box up but user will be unable to connect to it (as registry touch failed)
+				'Check if the number of time the failure has occured is the same as the threshold set by the
+				'User, This allows for false messages.
+  				If MachFailCount(I) = CONSEC_TIME Then
+					If RegConnectRet = 5 Then
+						'Write Debug info
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & ".....		CONSEC_TIMES = FailCount " 
+							Print #2 , Now() & "        " & ".....Machine Registry not connected to " &  MachFailCount(I) & " Time(s)"
+							Print #2 , Now() & "        " & " "
+							Print #2 , Now() & "        " & "Registry Connect not worked, No network Errors and Ping Worked" 
+							Print #2 , Now() & "        " & "Registry Connect not worked due to login failure"
+							Print #2 , Now() & "        " & "Sent Server Access-Denied Event" 
+						End If
+				
+						'Create message that is shown in the message tab in the NETIQ Console
+						'Create the Command post message
+						detailmsg = detailmsg & Chr$(10) & "Remote Registry could not be connected to,"
+						detailmsg = detailmsg & Chr$(10) & "Ping recieved a response from the server"
+						detailmsg = detailmsg & Chr$(10) & "The registry returned access denied"
+						detailmsg = detailmsg & Chr$(10) & "ensure that local MC account has permissions"
+						detailmsg = detailmsg & Chr$(10) & "to open remote registry"
+						EventMsg = Machname & " ACCESS-DENIED ERROR NULL"
+						'Fire Event
+						MSActions AccessSeverity, EventMsg, AKPID, _
+								"NT_MachineFolder = " & Machname, detailmsg
+					Else
+						'Write Debug info
+						If DO_DEBUG  = "y" Then
+							Print #2 , Now() & "        " & ".....		CONSEC_TIMES = FailCount " 
+							Print #2 , Now() & "        " & ".....Machine Registry not connected to " &  MachFailCount(I) & " Time(s)"
+								Print #2 , Now() & "        " & " "
+							Print #2 , Now() & "        " & "Registry Connect not worked, No network Errors and Ping Worked" 
+							Print #2, Now() & "        " & "Sent Server RPC DOWN Event" 
+						End If
+					
+						'Create message that is shown in the message tab in the NETIQ Console
+						'Create the Command post message
+						detailmsg = detailmsg & Chr$(10) & "Remote Registry could not be connected to,"
+						detailmsg = detailmsg & Chr$(10) & "Ping recieved a response from the server"
+						detailmsg = detailmsg & Chr$(10) & "This error may be due to the RPC service being down"
+						EventMsg = Machname & " RPC DOWN NULL"
+						'Fire Event
+						MSActions RPCSeverity, EventMsg, AKPID, _
+							"NT_MachineFolder = " & Machname, detailmsg
+					End If
+					'Reset failure counter once event has fired.
+					MachFailCount(I)=0
+					'Record that the Event has fired, this allows the auto clear event to be fired.
+					MachEventFired(I) = True
+				Else
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & ".....		FailCount <> CONSEC Times so move on"
+					End If
+				End If
+
+			'this is if the Ping did not work, so we cannot be sure if the machine is up/down as the ping did not
+			'get to the machine
+			ElseIf pingconnect=false Then
+				'Set up the Graph values
+				RetVal = DATA_ERRORVALUE		
+
+				If DO_DEBUG  = "y" Then
+					Print #2 , Now() & "        " & ".....Machine  : " & Machname & " occured net error trying to ping"
+					Print #2 , Now() & "        " & " "
+					Print #2 , Now() & "        " & ".....		Number of times this machine has failed = " & MachFailCount(I)
+					Print #2 , Now() & "        " & ".....		Consecutive times set to  = " & CONSEC_TIME
+				End If
+
+				'Network Error
+				'Check if the number of time the failure has occured is the same as the threshold set by the
+				'User, This allows for false messages.
+  				If MachFailCount(I) = CONSEC_TIME Then
+					'Write Debug info
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & ".....		CONSEC_TIMES = FailCount " 
+						Print #2 , Now() & "        " & ".....Machine Registry not connected to " &  MachFailCount(I) & " Time(s)"
+						Print #2 , Now() & "        " & " "
+						Print #2 , Now() & "        " & "Registry Connect not worked and a network error has occured" 
+						Print #2 , Now() & "        " & "Sent Server SERVER UNKNOWN Event" 
+					End If
+				
+					'Create message that is shown in the message tab in the NETIQ Console
+					'Create the Command post message
+					detailmsg = detailmsg & Chr$(10) & "Remote Registry could not be connected to"
+					detailmsg = detailmsg & Chr$(10) & "and Ping has reported that a network error has ocurred"
+					EventMsg = Machname & " SERVER UNKNOWN NULL"
+					'Fire Event
+					MSActions NetSeverity, EventMsg, AKPID, _
+						"NT_MachineFolder = " & Machname, detailmsg
+					'Reset failure counter once event has fired.
+					MachFailCount(I)=0
+					'Record that the Event has fired, this allows the auto clear event to be fired.
+					MachEventFired(I) = True
+				Else
+					If DO_DEBUG  = "y" Then
+						Print #2 , Now() & "        " & ".....		Failtimes <> CONSEC Times so move on"
+					End If
+   				End If
+
+
+			End If
+		
+		End If
+
+
+		'Update graph data
+		If DO_DATA = "y"  Then
+			'Write Debug info
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & ".....Write Data Log"
+			End If
+
+			'Set up graph messages
+			If RetVal = DATA_UPVALUE Then
+				detailmsg1 = Machname & " is up"
+			ElseIf 	RetVal = DATA_DOWNVALUE Then
+				detailmsg1 = Machname & " is Down"
+			ElseIf 	RetVal = DATA_ERRORVALUE Then
+				detailmsg1 = Machname & " state is Unknown"
+			End If
+			'Send graph data
+    		DataLog I, RetVal, detailmsg1
+		End If 	
+	Next I
+'close Debug file
+
+If DO_DEBUG  = "y" Then
+	Print #2 , Now() & "        " & "Finished Checking Machines"
+	Close #2
+End If
+GoTo main_exit
+
+main_error:
+
+Select Case Err.Number
+Case 52 To 76
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "c:\NetIQ_KSdebug\" & KSName & ".txt" & chr$(10) 
+	longm = longm & "This may be due to file being open." & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	Resume Next 
+Case Else
+	If DO_DEBUG  = "y" Then
+		Print #2 , Now() & "        " & "Error has occured, exiting script"
+		Print #2 , Now() & "        " & Err.description
+		Close #2
+	End If
+	mcabort resname,str(Err.Number)& " " & Err.description
+End Select
+
+main_exit:
+
+
+End Sub
+
+'### End KPS Section
+
+

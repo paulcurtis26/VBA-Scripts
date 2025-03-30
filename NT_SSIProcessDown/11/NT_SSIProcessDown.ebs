@@ -1,0 +1,189 @@
+'### Copyright (c) 1997 NetIQ Corp. All rights reserved.
+'### 
+'### NT_ProcessDown.ebs
+'###
+'### This KS checks if user-selected precesses or applications (.EXE or .COM) are running.  Raise
+'### an event if not.
+
+'### Begin KP-Status Section
+'NeedKPW = 0				' NeedKPW bit is 0
+'AdminOnly = 0				' AdminOnly bit is 0
+'DisplayToolBar = 1			' DisplayToolBar bit is 1
+'IamDiscovery = 0                       ' I am a discovery KS
+'Description = Find out if the user-specified processes are currently running
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""		'on Machine Folder
+'### End Type Section
+
+'### Begin KPP Section
+
+'### Author 		: ????
+'### Description	: Monitors PerfMon Counters 
+'### Changed by		: Paul Curtis
+'### Date			: 14/5/99
+'### Enhancements 	: -Added Auto Start Process
+
+'[V<Find out if user-selected processes, e.g., clock or tcpsvcs, are currently running.  Raise an event if any is not running.
+
+Const Processes = "clock,tcpsvcs"	'[M<Processes, separated by "," w/ no space>M] [T<String,1000,',',>T] 
+Const CommandLines = ""	'[M<Command Lines to restart Processes, separated by "," w/ no space>M] [T<String,1000,',',>T] 
+Const DO_EVENT = "y" '[M<Event? (y/n)>M][T<string,1,' ',yn">T]
+Const DO_DATA = "n" '[M<Collect Data? (y/n)>M][T<string,1,' ',yn">T]
+Const AUTO_RESTART = "y" '[M<Auto Restart? (y/n)>M][T<string,1,' ',yn">T]
+Const Sev_NotRunning = 8 '[M<Severity - Process is not running>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Failed_Torestart = 8 '[M<Severity - Process Failed to Restart>M] [T<Integer,,,1, 40, SevLevel>T]
+Const Succeded_Torestart = 8 '[M<Severity - Process Succeded to Restart>M] [T<Integer,,,1, 40, SevLevel>T]
+Const DO_DEBUG = "n"   ' [M<Write Debug Information? (y/n)>M] [T<String,1, ,"yn">T]
+
+'[A<When any specified process is not running, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+'### End KPP Section
+
+'### Begin KPS Section
+Dim NT As Object
+Dim SYS As Object
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = "c:\NetIQ_KSdebug\"
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+Sub Main()
+	Dim obj As String
+	Dim result As Double
+	Dim Detailmsg As String
+	Dim KSName As String
+	Dim ProcessCommand As String
+
+	If Processes = "" Then
+		Err.Description = "no process specified."
+		Err.raise 4104
+	End If
+
+	KSName="NT_SSIProcessDown"
+	
+	If DO_DEBUG  = "y" Then
+		If IterationCount() = 1 Then		
+			createret = createdebugdir	'Use Function to Create Directory if its not already there
+		End If
+		If FileExists("c:\NetIQ_KSdebug\" & KSName & ".txt") Then
+
+			If filelen("c:\NetIQ_KSdebug\" & KSName & ".txt") > 512000 Then
+
+				If FileExists("c:\NetIQ_KSdebug\" & KSName & ".old") Then
+					kill "c:\NetIQ_KSdebug\" & KSName & ".old"
+				End If
+
+				Name "c:\NetIQ_KSdebug\" & KSName & ".txt" As "c:\NetIQ_KSdebug\" & KSName & ".old"
+
+			End If
+		End If
+
+		Open "c:\NetIQ_KSdebug\" & KSName & ".txt" For Append Access Write As #2
+		Print #2, NOW() 
+	End If
+
+
+	If iterationcount() = 1 Then
+		If DO_DATA = "y" Then
+			For I = 1 To ItemCount(Processes, ",")			
+				obj = Item$(Processes, I,, ",")
+				DataHeader "Process " & obj & " Status",0,I
+				If DO_DEBUG ="y" Then			'Write Debug Info 
+					Print #2, Now() & "      " & "Setup Data Header for Process " & obj
+				End If
+			Next I
+		End If
+	End If
+
+
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set SYS = NT.System
+	
+	For I = 1 To ItemCount(Processes, ",")
+		obj = Item$(Processes, I,, ",")
+		If DO_DEBUG ="y" Then			'Write Debug Info 
+			Print #2, Now() & "      " & "Checking Process " & obj
+		End If
+
+		result = SYS.CounterValue("Process", "% Processor Time", obj)
+
+		If DO_DEBUG ="y" Then			'Write Debug Info 
+			Print #2, Now() & "      " & "Processor Time for Process " & obj & " is " & result & "%"
+		End If
+
+		If result = -1 Then
+			If DO_DEBUG ="y" Then			'Write Debug Info 
+				Print #2, Now() & "      " & "Failed to Verify Process " & obj
+			End If
+			If DO_DATA = "y" Then
+				DataLog I, 0, "Process " & obj & " Down"
+			End If
+			If AUTO_RESTART = "y" Then
+				ProcessCommand = Item$(CommandLines, I,, ",")
+				retval = shell(Chr(34) & ProcessCommand & Chr(34),5)
+				If retval < 1 Then
+					If DO_DEBUG ="y" Then			'Write Debug Info 
+						Print #2, Now() & "      " & "Failed to Restart Process " & obj
+					End If
+
+					If DO_EVENT = "y" Then
+						Detailmsg = "Please check the path or use the task manager/perfmon to see if the process is still running."
+						MSActions Failed_Torestart, obj & " Failed to Restart", AKPID, "" , Detailmsg
+					End If
+				Else
+					If DO_DEBUG ="y" Then			'Write Debug Info 
+						Print #2, Now() & "      " & "Succeded to Restart Process " & obj
+					End If
+
+					If DO_EVENT = "y" Then
+						Detailmsg = "Restart of process " & obj & " succeded, Command Line used to restart was " & ProcessCommand
+						MSActions Succeded_Torestart, obj & " Succeded to Restart", AKPID, "" , Detailmsg
+					End If
+				End If
+			Else
+				If DO_DEBUG ="y" Then			'Write Debug Info 
+					Print #2, Now() & "      " & "AutoRestart not set Process " & obj & " Down"
+				End If
+
+				' failed to verify it's running
+				Detailmsg = "Please check the path or use the task manager/perfmon to see if the process is still running."
+				MSActions Sev_NotRunning, obj & " is not running", AKPID, "" , Detailmsg
+			End If
+		Else 
+			If DO_DEBUG ="y" Then			'Write Debug Info 
+				Print #2, Now() & "      " & "Process " & obj & " Up"
+			End If
+
+			If DO_DATA = "y" Then
+				DataLog I, 1, "Process " & obj & " up"
+			End If
+		End If
+	Next I
+If DO_DEBUG ="y" Then			'Write Debug Info 
+	Close #2
+End If
+
+End Sub
+
+'### End KPS Section
+

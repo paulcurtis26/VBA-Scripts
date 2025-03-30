@@ -1,0 +1,1051 @@
+'### Copyright (c) 1996, 1997 NetIQ Corp. All rights reserved.
+'### 
+'### NT_SSIServiceCheck.ks
+'### detects if the user specified service is hung. If so, report an event and starts the service
+'###
+
+'$Revision: 2 $
+
+'### Begin KP-Version Section
+Const AppManID = "3.4.415.1.2"
+Const KSVerID = "3.4"
+'Comment = This version is released with Version 3.4 of AppManager (Author Paul Curtis)
+'Log:
+'%KSVerID=1.0, %Date=12/21/1999, %Time=15:02:08, %User= W2KDEV\adm_user  (sa), %TZ=GMT 
+'	Addition of SSI Specific Functions (Author Paul Curtis)
+'### End KP-Version Section
+
+
+'### Begin KP-Status Section
+'NeedKPW = 0			'bit is 0
+'AdminOnly = 0			'bit is 0
+'DisplayToolBar = 1		'bit is 1
+'IAmDiscovery = 0		'bit is 0
+'IAmAction = 0			'bit is 0
+'Description = Monitors any user specified service.
+'### End KP-Status Section
+
+'### Begin KPC Section
+'KPC = FiveM
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""		'Drop on machine object
+'### End Type Section
+
+'### Begin KPP Section
+'[V<CPReady.Monitors any user specified service.Use * To check all automatic services.(Version 3.4ac)>V]
+Const SeverityList = "Messenger"	'[M<Services to raise severe error, separated by comma w/ no space>M] [T<String,80,',',>T] 
+Const SevThreshold     = 1 			'[M<Severity Threshold  - # of consecutive iterations the service is hung/Down>M] [T<Integer,,,1,39, SevLevel>T] 	
+Const Sev_ManMonitor  = "y"			'[M<Monitor Severe Services if set to Manual? (y/n)>M] [T<String,1,,"yn">T]
+Const Sev_SevereFail = 5			'[M<Severity - Severe Service Hung/Down>M] [T<Integer,,,1, 39, SevLevel>T] 
+Const Blank1 = "" 					'[M<>M][T<string,1,' ',">T]
+Const WarningList = "alerter"		'[M<Services to raise warning error, separated by comma w/ no space>M] [T<String,80,',',>T] 
+Const WarnThreshold     = 1 		'[M<Warning Threshold  - # of consecutive iterations the service is hung/Down>M] [T<Integer,,,1, 39, SevLevel>T] 	
+Const Warn_ManMonitor  = "y"		'[M<Monitor Warning Services if set to Manual? (y/n)>M] [T<String,1,,"yn">T]
+Const Sev_Warningfail = 18 			'[M<Severity - Warning Service Hung/Down>M] [T<Integer,,,1, 39, SevLevel>T] 
+Const Blank2 = "" 					'[M<>M][T<string,1,' ',">T]
+Const InfoList = "spooler"			'[M<Services to raise info error, separated by comma w/ no space>M] [T<String,80,',',>T] 
+Const InfoThreshold     = 1 		'[M<Info Threshold  - # of consecutive iterations the service is hung/Down>M] [T<Integer,,,1, 39, SevLevel>T] 	
+Const Info_ManMonitor  = "y"		'[M<Monitor Info Services if set to Manual? (y/n)>M] [T<String,1,,"yn">T]
+Const Sev_infofail = 25 			'[M<Severity - info Service Hung/Down>M] [T<Integer,,,1, 39, SevLevel>T] 
+Const Blank3 = "" 					'[M<>M][T<string,1,' ',">T]
+Const ExclusionList = ""			'[M<Services to EXCLUDE, separated by comma w/ no space>M] [T<String,80,',',>T] 
+Const Blank4 = "" 					'[M<>M][T<string,1,' ',">T]
+Const Sev_Error = 2 				'[M<Severity - Script Errors>M] [T<Integer,,,1, 39, SevLevel>T] 
+Const DEBUG  = "n"					'[M<Write Debug Info? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_NUMBERS  = "y"				'[M<Display Number Values? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_NotExist  = "y"			'[M<Send Event when Service Does not Exist? (y/n)>M] [T<String,1,,"yn">T]
+Const Sev_NotExist = 25 			'[M<Severity - Service does not Exist>M] [T<Integer,,,1, 39, SevLevel>T] 
+Const AKPID = "AKP_NULL"			'[M<Action Taken>M]
+'[A<When a service is detected hung, the selected action is taken.>A]                   
+'### End KPP Section
+
+'### Begin KPS Section
+Const SEND_NORMAL = "y"				
+Const DO_DATAInfo  = "n"			
+Const DO_DATAWarn  = "n"			
+Const DO_DATASev  = "n"				
+Const DO_EVENT  = "y"			
+Const DO_DATA = "n"					
+Const Sev_Normal = 40 				
+Declare Function GetComputerName Lib "kernel32" Alias "GetComputerNameA" (ByVal sBuffer As String, lSize As Long) As Long
+Option Base 1
+Dim resname As String
+
+Dim DO_DEBUG As String
+Dim Openfilefail As Boolean
+Dim Machinenamestr As String
+
+Const DATA_UPVALUE = 100	' plot 100 if up
+Const DATA_DOWNVALUE = 0	' plot 0 if down
+Dim txtrndnum As Integer                                                       
+'Constants for Service States
+Const SERVICE_STOP = &H00000001                                  
+Const SERVICE_START_PENDING = &H00000002
+Const SERVICE_STOP_PENDING = &H00000003
+Const SERVICE_RUNNING = &H00000004
+Const SERVICE_CONTINUE_PENDING = &H00000005
+Const SERVICE_PAUSE_PENDING = &H00000006
+Const SERVICE_PAUSED = &H00000007
+Const NQ_SERVICEINFO_STATUS = 0&
+Const NQ_SERVICEINFO_STARTTYPE = 1&
+Const NQ_SERVICEINFO_PATH = 2&
+Global Const DONTCARE = -1&
+Global Const AUTO_START = 2&
+ 
+Global Const REG_SZ As Long = 1
+Global Const HKEY_LOCAL_MACHINE = &H80000002 
+Global Const ERROR_NONE = 0
+Global Const KEY_ALL_ACCESS = &H3F 
+
+Declare Function RegCloseKey Lib "advapi32.dll" _ 
+		(ByVal hKey As Long) As Long 
+Declare Function RegOpenKeyEx Lib "advapi32.dll" Alias _ 
+		"RegOpenKeyExA" (ByVal hKey As Long, ByVal lpSubKey As String, _ 
+		ByVal ulOptions As Long, ByVal samDesired As Long, ByRef phkResult As Long) As Long 
+Declare Function RegQueryValueExString Lib "advapi32.dll" Alias _ 
+		"RegQueryValueExA" (ByVal hKey As Long, ByVal lpValueName As _ 
+		String, ByVal lpReserved As Long, lpType As Long, ByVal lpData _
+		As String, lpcbData As Long) As Long 	
+
+
+Function GetInstallPath() As String
+	Dim lRetVal&, hKey&, ValLen&, DataName$, DataLen&, rc&
+	
+	GetInstallPath = ""
+	lRetVal = RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\NetIQ\AppManager", 0, _
+		KEY_ALL_ACCESS, hKey)
+	If (lRetVal <> ERROR_NONE) Then
+		GoTo Installpath_error
+	End If
+	DataLen = 256
+	DataName = String$(DataLen, 0)	
+	lRetVal = RegQueryValueExString(hKey, "InstallPath", 0&, REG_SZ, DataName, DataLen)
+	If (lRetVal <> ERROR_NONE) Then
+		GoTo Installpath_error
+	End If
+	DataName = Left$(DataName, DataLen-1)
+	DataName = Trim$(DataName)
+	GetInstallPath = DataName & "\KSDebug\"
+
+GoTo Installpath_exit
+
+Installpath_error:
+	DO_DEBUG = "n"
+	eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+	longm = "Unable to open debug file " &  chr$(10) 
+	longm = longm & "Failed to get NetIQ Install Path" & chr$(10)
+	longm = longm & "from the registry" & chr$(10)
+	longm = longm & "Debugging will be stopped for this script," & chr$(10)
+	longm = longm & "Until problem Is fixed."
+	MSActions 1,eventmsg , AKPID, resname, longm
+	Openfilefail = true
+	GetInstallPath=""
+Installpath_exit:
+	lRetVal = RegCloseKey (hKey)
+
+End Function
+
+               
+'Structure for storing Service Information
+Type SERV_STRUCT
+	ServiceName As String
+	Severity As Integer
+	Threshold As Integer
+	ThreshCount As Long
+	EventFired As Long
+	EventTime As Date
+	ServiceDown As Boolean
+	ServiceHung As Boolean
+	MonitorMan As String
+	ManualTime As Date
+	ManEventFired As Long
+	Dodata As String
+End Type        
+                
+'Objects for communicating with the NT Functions
+Dim NT As Object
+Dim OBJ As Object
+Const UNITUPDOWN = "^^up-down"
+'Array for Service Structures
+Dim Serv() As SERV_STRUCT
+Private ServCnt As Long
+Private RealServices As String
+Dim servicefileopencount As Integer
+
+Dim debugproccess As Boolean
+'Function to check if a service that is provided is in a list that is passed to the function
+Function IsServiceInList(ByVal ServiceName As String, ByVal ServiceList As String) As Integer
+ServiceExists = false
+If itemcount(ServiceList) > 0 Then
+	'Cycle through Service list to see if the info service exists
+	For ServicetoCheck = 1 To itemcount(ServiceList)
+		Service=item$(ServiceList,ServicetoCheck,,",")'Get current service from list
+		If ServiceName = Service  Then                 'Check if it matches the Service that is passed in
+			ServiceExists = true
+			Exit For
+		End If
+	Next ServicetoCheck
+
+End If
+
+IsServiceInList = ServiceExists	'Return whether the service is in the list
+
+End Function
+
+'Used To remove spaces from service names
+Function AlterString(sString As String, sCharToReplace As String, sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+
+
+
+'This Function expands the list of services the user types in with a list that has any elements with a
+'* next of then expanded to incude all services that start with the same characters
+Function ExpandServiceList(ListToExpand As String, ServiceList As String, AllowStar As Boolean) As String
+
+
+	'Count number of services to expand
+	Listitems=itemcount(ListToExpand)
+	'Count how many services were found on the system
+	ServiceCount = itemcount(ServiceList)
+	'check if there are services to be expanded
+	If Listitems > 0 Then
+		For Listcount = 1 To Listitems
+			'Get service that the user typed in
+			ListService = item$(ListToExpand,Listcount,,",")
+			'Check if a single star (all services is allows in this list) has been entered
+			'Some lists cannot have a * so they will have allowstart set to false
+			If  ListService = "*" And AllowStar = false Then
+				GoTo ListHasStar_Error
+			ElseIf  ListService = "*" And AllowStar = True Then
+				ExpandedList=ServiceList & ","
+				Exit For
+			'If the last char is a wildcard (*) the this entry needs to be expanded to include all services
+			'Starting with teh same chars
+			ElseIf right(ListService,1) = "*" Then 'This is a WildCard so More Processing
+				For x = 1 To ServiceCount
+					'Cycle through all available service to see what matches
+					CurrentService=item$(ServiceList,x,,",")
+					If CurrentService Like ListService Then
+						ExpandedList=ExpandedList + item$(ServiceList,x,,",") + ","
+					End If
+				Next x
+			Else
+				ExpandedList=ExpandedList + ListService + ","
+			End If
+		Next ListCount
+		'Trim off last ","
+		If Len(ExpandedList) > 0 Then
+			ExpandedList=left(ExpandedList,Len(ExpandedList)-1)
+		End If
+	End If
+'Return expanded list
+ExpandServiceList=ExpandedList
+
+Exit Function
+
+ListHasStar_Error:
+
+ExpandServiceList="List Contained a Star"
+
+End Function
+
+'Used to create Debug Directory, if it does not exist.
+'This is a seperate function so that "On Error Resume Next" can be used for just this code.
+Function createdebugdir() As Integer
+	On Error Resume Next
+
+	Dim dirname As String 
+	dirname = GetInstallPath()
+
+	MkDir dirname
+	If Err <> 0 Then
+		createdebugdir = Err
+	Else
+		createdebugdir = 0
+	End If
+
+End Function
+
+
+Sub Main()
+	Dim eventmsg As String
+	On Error GoTo main_error
+	Dim LongMessage As String
+	Dim ShortMsg As String
+	CR =Chr(13)
+	Dim Startuptype As Long 
+	Dim valuestring	As String
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set OBJ = NT.System
+	Dim systemservices As String
+	Dim ProcessedSevList As String
+	Dim resname As String
+	If iterationcount() = 1 Then
+	    Dim NameSize As Long
+  		Dim Machinename1 As String
+	  	Dim y As Integer
+    	MachineName1 = Space$(16)
+	    NameSize = Len(MachineName1)
+    	X = GetComputerName(Machinename1,NameSize)
+	  	For y = 1 To Len(Machinename1)
+  			If ASC(Mid(Machinename1,y,1)) <> 0 Then
+  				Machinenamestr = Machinenamestr + Mid(Machinename1,y,1)
+	  		End If
+  		Next y
+		Machinenamestr = lcase(trim(Machinenamestr))
+	End If
+	resname = "NT_MachineFolder = " & NT_MachineFolder
+	'Open Debug File
+	DO_DEBUG = DEBUG
+
+	debugproccess = false
+	NetIQInstallpath = GetInstallPath()
+
+	If DO_DEBUG  = "y" Then
+		If NetIQInstallpath <> "" Then
+			debugproccess = true
+			If iterationcount() =1 Then
+				createret = createdebugdir	'Use Function to Create Directory if its not already there
+			End If
+			KSName = "NT_SSIServiceCheck" & str(getjobid())
+			If FileExists(NetIQInstallpath & KSName & ".txt") Then
+
+				If filelen(NetIQInstallpath & KSName & ".txt") > 512000 Then
+		
+					If FileExists(NetIQInstallpath & KSName & ".old") Then
+						kill NetIQInstallpath & KSName & ".old"
+					End If
+
+					Name NetIQInstallpath & KSName & ".txt" As NetIQInstallpath & KSName & ".old"
+
+				End If
+			End If
+			'Open Debug File
+			Open NetIQInstallpath & KSName & ".txt" For Append Access Write As #2
+			If Openfilefail = true And DO_DEBUG = DEBUG Then 
+				If DO_NUMBERS = "y" Then
+					eventmsg = Machinenamestr & " " &  "DEBUG NORMAL " & alterstring(Time()," ","-")
+				Else
+					eventmsg = Machinenamestr & " " &  "DEBUG NORMAL NULL"
+				End If
+				longm = "Opened debug file " &  chr$(10) 
+				longm = longm & NetIQInstallpath & KSName & ".txt" & chr$(10) 
+				MSActions 40,eventmsg , AKPID, resname, longm
+				Openfilefail = false
+				Print #2 , Now() & "        " & "*********Restart Debugging*********"
+			End If
+			debugproccess = false
+		End If
+	End If
+	If NetIQInstallpath = "" Then
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "NetIQ Install path failure"
+			Close #2
+		End If
+		mcabort resname,"Failed to get NetIQ Install Path"
+	End If
+
+
+	If (DO_DATA = "y" And IterationCount() = 1) Then
+		DataHeader "Service states ", 0, 1	
+	End If
+
+
+	If iterationcount() =1 Then
+		
+		servicefileopencount=0
+		debugproccess = false
+		If fileexists(NetIQInstallpath & "servicelist" & str(getjobid()) & ".txt") = false Then
+			'Get list of services on the system
+			ServiceCount = OBJ.ServiceEnum(DONTCARE, AUTO_START, systemservices)
+			If DO_DEBUG  = "y" Then
+				Print #2, now() & "      " & "Number of Services : " & OBJ.ServiceEnum(DONTCARE, AUTO_START, systemservices)
+			End If
+			'check that no entries in list are "*", as this will include all services and give them a high severity
+			'Process Severity List
+			ExpandedSevList =ExpandServiceList(SeverityList,SystemServices,false)
+			'check that no entries in list are "*", as this will include all services and give them a high severity
+			'Process Warning List
+			ExpandedWarnList = ExpandServiceList(WarningList,SystemServices,false)
+			'check that no entries in list are "*", as this will include all services and give them a high severity
+			'Process Info List
+			ExpandedInfoList = ExpandServiceList(InfoList,SystemServices,True)
+			'check that no entries in list are "*", as this will include all services and give them a high severity
+			'Process Exclusion List
+			ExpandedExclusionList = ExpandServiceList(ExclusionList,SystemServices,false)
+		
+			
+			If ExpandedSevList = "List Contained a Star" Or ExpandedWarnList = "List Contained a Star" Then
+				GoTo ListHasStar_Error
+			End If
+	
+			'Remove Items from lists if they appear in other lists
+			'process Info Services first
+
+			Infoitems=itemcount(ExpandedInfoList)
+			If Infoitems > 0 Then
+				'Cycle through each element in Info List to check if it exists in the
+				'Warning,Severity or Exclusion list, if it does then don't move it into the temp list
+				For Infocount = 1 To Infoitems
+			
+					InfoService = item$(ExpandedInfoList,Infocount,,",")
+					'Check each list to see if Service is listed else where
+					If (IsServiceInList(InfoService,ExpandedWarnList) = false) And (IsServiceInList(InfoService,ExpandedSevList)=false) And (IsServiceInList(InfoService,ExpandedExclusionList)=false) Then
+						ProcessedInfoList = ProcessedInfoList & InfoService & ","
+					End If
+
+				Next InfoCount
+				If itemcount(ProcessedInfoList) > 0 Then
+					ProcessedInfoList=left(ProcessedInfoList,Len(ProcessedInfoList)-1)
+				End If
+			End If								
+
+			'process Warning Services first
+			Warnitems=itemcount(ExpandedWarnList)
+			If Warnitems > 0 Then
+
+				'Cycle through each element in Warning List to check if it exists in the
+				'Info,Severity or Exclusion list, if it does then don't move it into the temp list
+				For Warncount = 1 To Warnitems
+			
+				    WarnService = item$(ExpandedWarnList,Warncount,,",")
+			
+					'Check each list to see if Service is listed else where
+
+					If (IsServiceInList(WarnService,ExpandedSevList) = false) And (IsServiceInList(WarnService,ExpandedExclusionList)=false) Then
+
+						ProcessedWarnList = ProcessedWarnList & WarnService & ","
+
+					End If
+
+		
+			
+				Next WarnCount
+
+				If itemcount(ProcessedWarnList) > 0 Then
+
+					ProcessedWarnList=left(ProcessedWarnList,Len(ProcessedWarnList)-1)
+
+				End If
+
+			End If
+
+ 
+
+			'process Warning Services first
+
+			Sevitems=itemcount(ExpandedSevList)
+
+			If Sevitems > 0 Then
+
+				'Cycle through each element in Severity List to check if it exists in the
+
+				'Exclusion list, if it does then don't move it into the temp list
+
+				For Sevcount = 1 To Sevitems
+
+				    SevService = item$(ExpandedSevList,Sevcount,,",")
+
+					'Check each list to see if Service is listed else where
+
+					If IsServiceInList(SevService,ExpandedExclusionList)=false Then
+							ProcessedSevList = ProcessedSevList & SevService & ","
+					End If
+
+				Next SevCount
+
+				If itemcount(ProcessedSevList) > 0 Then
+					ProcessedSevList=left(ProcessedSevList,Len(ProcessedSevList)-1)
+				End If
+
+			End If
+
+
+			'Get total number of services
+			NumberOfServices = ItemCount(ProcessedSevList) + ItemCount(ProcessedWarnList) + ItemCount(ProcessedInfoList)
+
+			NumberofSev = ItemCount(ProcessedSevList)
+
+			NumberofWarn = ItemCount(ProcessedWarnList)
+
+			NumberofInfo = ItemCount(ProcessedInfoList)
+
+
+			'Check if there are services to monitor
+			If NumberOfServices > 0 Then
+
+				Dim temparray(NumberOfServices) As SERV_STRUCT
+
+	
+				'If there are then poplulate the array with the relevant info
+				If NumberofSev > 0 Then
+
+					For ServiceCount=1 To NumberofSev
+
+						temparray(ServiceCount).ServiceName = Item$(ProcessedSevList,ServiceCount,,",")
+
+						temparray(ServiceCount).Severity=Sev_SevereFail
+
+						temparray(ServiceCount).Threshold=SevThreshold
+
+						temparray(ServiceCount).EventFired = 0
+
+						temparray(ServiceCount).MonitorMan = Sev_ManMonitor
+
+						temparray(ServiceCount).dodata = DO_DATASev
+
+						temparray(ServiceCount).ManEventFired = 0
+
+					Next ServiceCount
+
+
+				End If
+
+				LastSevElement = NumberofSev
+
+				If NumberofWarn > 0 Then
+
+					For ServiceCount=1 To NumberofWarn
+						Element = ServiceCount + NumberofSev 
+				   
+						temparray(Element).ServiceName = Item$(ProcessedWarnList,ServiceCount,,",")
+					
+						temparray(Element).Severity=Sev_Warningfail
+
+						temparray(Element).Threshold=WarnThreshold
+
+						temparray(Element).EventFired = 0
+
+						temparray(Element).MonitorMan = Warn_ManMonitor
+
+						temparray(Element).dodata = DO_DATAWarn
+
+						temparray(Element).ManEventFired = 0
+				
+					Next ServiceCount
+
+
+
+				End If
+
+				LastWarnElement = NumberofSev + NumberofWarn
+				'msgbox LastWarnElement
+
+				If NumberofInfo > 0 Then
+
+					For ServiceCount=1 To NumberofInfo
+
+						Element = ServiceCount + NumberofSev + NumberofWarn
+
+						temparray(Element).ServiceName = Item$(ProcessedInfoList,ServiceCount,,",")
+
+						temparray(Element).Severity=Sev_InfoFail
+
+						temparray(Element).Threshold=InfoThreshold
+
+						temparray(Element).EventFired = 0
+
+						temparray(Element).MonitorMan = Info_ManMonitor
+
+						temparray(Element).dodata = DO_DATAInfo
+
+						temparray(Element).ManEventFired = 0
+
+					Next ServiceCount
+
+			
+
+				End If
+
+				LastInfoElement = NumberofSev + NumberofWarn + NumberofInfo			
+
+				If DO_DEBUG  = "y" Then
+					For x = 1 To ubound(temparray)
+						Print #2, now() & "      " & "Services To Check (Before being Written to File)"
+						Print #2, now() & "      " & "Element " & x & "   " & temparray(x).ServiceName
+						Print #2, now() & "      " & "Element " & x & "   ........Severity :" & temparray(x).Severity
+						Print #2, now() & "      " & "Element " & x & "   ........Threshold :" & temparray(x).Threshold
+						Print #2, now() & "      " & "Element " & x & "   ........ThreshCount :" & temparray(x).ThreshCount
+						Print #2, now() & "      " & "Element " & x & "   ........EventFired :" & temparray(x).EventFired
+						Print #2, now() & "      " & "Element " & x & "   ........EventTime :" & temparray(x).EventTime
+						Print #2, now() & "      " & "Element " & x & "   ........ServiceDown :" & temparray(x).ServiceDown
+						Print #2, now() & "      " & "Element " & x & "   ........ServiceHung :" & temparray(x).ServiceHung
+						Print #2, now() & "      " & "Element " & x & "   ........MonitorMan :" & temparray(x).MonitorMan
+						Print #2, now() & "      " & "Element " & x & "   ........ManualTime :" & temparray(x).ManualTime
+						Print #2, now() & "      " & "Element " & x & "   ........ManEventFired :" & temparray(x).ManEventFired
+						Print #2, now() & "      " & "Element " & x & "   ........Dodata :" & temparray(x).Dodata
+					Next x
+				End If
+			End If
+
+			If arrayDims(temparray) = 0	 Then
+				If DO_DEBUG  = "y" Then
+					Print #2, now() & "       " & "*******************************************************************"
+					Close #2
+				End If
+  				MCAbort "NT_MachineFolder = " & NT_MachineFolder, "No Services Listed to check"
+			End If
+
+			createret = createdebugdir
+			Dim scount As Integer
+			scount = ubound(temparray)
+			debugproccess = false
+			If DO_DEBUG  = "y" Then
+				Print #2, now() & "       " & "Trying to open service list file to write array to it"
+			End If
+			Open NetIQInstallpath & "servicelist" & str(getjobid()) & ".txt" For Output As #4
+			If servicefileopencount = 1 Then
+				If DO_DEBUG  = "y" Then
+					Print #2, now() & "       " & "Sending event as service file could not be opened"
+					Print #2, now() & "       " & "at last iteration, but can now"
+				End If
+				LongMessage = "Script able to open service list file after failing last time"
+				If DO_NUMBERS = "y" Then
+					eventmsg = Machinenamestr & " " &  "SERVICE-LIST NORMAL " &  alterstring(Time()," ","-")
+				Else
+					eventmsg = Machinenamestr & " " &  "SERVICE-LIST NORMAL NULL"
+				End If
+				MSActions Sev_Normal,eventmsg, AKPID, "" , LongMessage			
+			End If
+			servicefileopencount = 0
+			servicestr = SeverityList & "-" & warningList & "-" & infoList 
+
+			Write #4,servicestr
+			Write #4,scount
+
+			For y = 1 To scount
+				Write #4, temparray(y).ServiceName ,temparray(y).Severity,temparray(y).Threshold,temparray(y).ThreshCount
+				Write #4, temparray(y).EventFired, temparray(y).EventTime ,temparray(y).ServiceDown,temparray(y).ServiceHung,temparray(y).Dodata  
+				Write #4, temparray(y).MonitorMan,temparray(y).ManualTime,temparray(y).ManEventFired
+			Next y
+			Close #4
+		Else
+			If DO_DEBUG  = "y" Then
+				Print #2, now() & "       " & " File aleady exists, will try to use this one (it may be left over from a previous attempt)"
+				Print #2, now() & "       " & " So the services to check will examined"
+			End If
+		End If
+	End If
+
+	Dim SeverityArray() As SERV_STRUCT
+
+	servicestr = SeverityList & "-" & warningList & "-" & infoList 
+	debugproccess = false
+	If DO_DEBUG  = "y" Then
+		Print #2, now() & "       " & "Opening service list file to read array elements"
+	End If
+	If fileexists(NetIQInstallpath & "servicelist" & str(getjobid()) & ".txt") Then
+		Open NetIQInstallpath & "servicelist" & str(getjobid()) & ".txt" For Input As #4
+		If DO_DEBUG  = "y" Then
+			Print #2, now() & "      " & "Opening Service file"
+		End If
+	Else
+		If DO_DEBUG  = "y" Then
+			Print #2, now() & "      " & "Aborting as Servicelist file could not be found"
+			Close #2
+		End If
+		MCAbort "NT_MachineFolder = " & NT_MachineFolder,"Unable to locate correct Servicelist File" 
+	End If
+	Input #4,servicestrtmp
+	If servicestrtmp <> servicestr Then
+		If DO_DEBUG  = "y" Then
+			Print #2, now() & "      " & "Aborting as correct Servicelist file was not opened"
+			Close #2
+		End If
+		Close #4
+		Dim abortstr As String
+		abortstr =  "Unable to locate correct Servicelist File" & Chr(13) & Chr(10) & "Servicelist read from file :" & Chr(13) & Chr(10) & "      " & servicestrtmp
+		abortstr = abortstr &  Chr(13) & Chr(10) & "Servicelist from parameters : " & Chr(13) & Chr(10) & "      " & servicestr
+		MCAbort "NT_MachineFolder = " & NT_MachineFolder, abortstr
+	Else
+		If DO_DEBUG  = "y" Then
+			Print #2, now() & "      " & "File found is correct service list file for the job"
+		End If
+	End If
+	Input #4,scount
+	ReDim SeverityArray(scount) As SERV_STRUCT
+	x = 1
+	For y = 1 To scount
+		Input #4, SeverityArray(y).ServiceName ,SeverityArray(y).Severity,SeverityArray(y).Threshold,SeverityArray(y).ThreshCount
+		Input #4, SeverityArray(y).EventFired,EventTime ,SeverityArray(y).ServiceDown,SeverityArray(y).ServiceHung,SeverityArray(y).Dodata  
+		Input #4, SeverityArray(y).MonitorMan,ManualTime,SeverityArray(y).ManEventFired
+		 SeverityArray(y).EventTime	= cvdate(EventTime)
+		 SeverityArray(y).ManualTime = cvdate(ManualTime)
+	Next y
+	Close #4
+	If DO_DEBUG  = "y" Then
+		Print #2, now() & "       " & "Read new Array from service file"
+		For x = 1 To ubound(SeverityArray)
+			Print #2, now() & "      " & "Services To Check (After being read from File)"
+			Print #2, now() & "      " & "Element " & x & "   " & SeverityArray(x).ServiceName 
+			Print #2, now() & "      " & "Element " & x & "   ........Severity :" & SeverityArray(x).Severity
+			Print #2, now() & "      " & "Element " & x & "   ........Threshold :" & SeverityArray(x).Threshold
+			Print #2, now() & "      " & "Element " & x & "   ........ThreshCount :" & SeverityArray(x).ThreshCount
+			Print #2, now() & "      " & "Element " & x & "   ........EventFired :" & SeverityArray(x).EventFired
+			Print #2, now() & "      " & "Element " & x & "   ........EventTime :" & SeverityArray(x).EventTime
+			Print #2, now() & "      " & "Element " & x & "   ........ServiceDown :" & SeverityArray(x).ServiceDown
+			Print #2, now() & "      " & "Element " & x & "   ........ServiceHung :" & SeverityArray(x).ServiceHung
+			Print #2, now() & "      " & "Element " & x & "   ........Dodata :" & SeverityArray(x).Dodata
+			Print #2, now() & "      " & "Element " & x & "   ........MonitorMan :" & SeverityArray(x).MonitorMan
+			Print #2, now() & "      " & "Element " & x & "   ........ManualTime :" & SeverityArray(x).ManualTime
+			Print #2, now() & "      " & "Element " & x & "   ........ManEventFired :" & SeverityArray(x).ManEventFired
+		Next x
+
+	End If
+
+'Code to work out if service is hung/down
+If arrayDims(SeverityArray) > 0 Then
+		Dim objup As Boolean
+		Dim tmp As String
+		Dim currentstatus As Long
+
+	For x = 1 To ubound(SeverityArray)
+		ServiceName = SeverityArray(x).Servicename
+		If DO_DEBUG  = "y" Then
+			Print #2, now() & "      " & "Checking Service " & ServiceName
+		End If	
+
+		If OBJ.ServiceInfo(ServiceName,1,Startuptype,valuestring) = false Then
+			If DO_DEBUG  = "y" Then
+				Print #2, now() & "      " & "Unable to get service startup settings for Service : " & SeverityArray(x).ServiceName 
+			End If
+			LongMessage = "Unable to retrive the startup settings for servive " & SeverityArray(x).ServiceName 
+			ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & "-StartSettings ERROR NULL"
+			MSActions SeverityArray(x).Severity,ShortMsg, AKPID, "" , LongMessage			
+		Else
+			If SeverityArray(x).MonitorMan = "n" And Startuptype = 3 Then
+				'record time for service being set to manual
+
+				If SeverityArray(x).ManEventFired = false Then
+					SeverityArray(x).ManualTime = now()
+					SeverityArray(x).ManEventFired = true
+					LongMessage = "Service " & SeverityArray(x).ServiceName & " Was set to manual at " &  SeverityArray(x).ManualTime
+					If DO_DEBUG  = "y" Then
+						Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Fire Event for service set to manual"
+					End If
+					If DO_NUMBERS = "y" Then
+						spacepos = instr(1,SeverityArray(x).ManualTime," ")
+						ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " MANUAL " & AlterString(Mid(str(SeverityArray(x).ManualTime),spacepos + 1,Len(str(SeverityArray(x).ManualTime))-spacepos)," ","-")
+					Else
+						ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " MANUAL NULL"
+					End If
+					MSActions SeverityArray(x).Severity,ShortMsg, AKPID, "", LongMessage
+				End If
+
+			ElseIf (SeverityArray(x).MonitorMan = "y" And Startuptype = 3) Or Startuptype = 2 Then
+				If Startuptype = 2 And SeverityArray(x).ManEventFired = true Then
+					SeverityArray(x).ManEventFired = false
+					ServiceManTimes = datediff("s",SeverityArray(x).ManualTime,now())				
+					LongMessage = "Service " & SeverityArray(x).ServiceName & " Was set to Automatic at " &  now()
+					If DO_DEBUG  = "y" Then
+						Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Fire Event for service set to Auto"
+					End If
+					If DO_NUMBERS = "y" Then
+						ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " NOT-MANUAL " & ServiceManTimes
+					Else
+						ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " NOT-MANUAL NULL"
+					End If
+					MSActions Sev_Normal,ShortMsg, AKPID, "", LongMessage
+				End If
+				If OBJ.ServiceExist(ServiceName) = true Then
+					objup = OBJ.ServiceInfo(ServiceName, 0, CurrentStatus, tmp)
+			
+					'Service Hung
+					If (CurrentStatus = SERVICE_START_PENDING) _
+						Or (CurrentStatus = SERVICE_STOP_PENDING) _
+						Or (CurrentStatus =SERVICE_CONTINUE_PENDING) _
+						Or (CurrentStatus =SERVICE_PAUSE_PENDING) Then
+			
+						SeverityArray(x).ServiceHung = true
+						SeverityArray(x).ServiceDown = false
+						SeverityArray(x).ThreshCount = SeverityArray(x).ThreshCount + 1
+						If DO_DEBUG  = "y" Then
+							Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " is Hung"
+							Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Threshcount : " & 	SeverityArray(x).ThreshCount
+						End If
+					'Service Down
+					ElseIf (CurrentStatus = SERVICE_STOP) Then
+						SeverityArray(x).ServiceHung = false
+						SeverityArray(x).ServiceDown = true
+						SeverityArray(x).ThreshCount = SeverityArray(x).ThreshCount + 1
+						If DO_DEBUG  = "y" Then
+							Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " is Down"
+							Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Threshcount : " & 	SeverityArray(x).ThreshCount
+						End If
+					'Service Normal
+					ElseIf (CurrentStatus = SERVICE_RUNNING) Then
+						SeverityArray(x).ServiceHung = False
+						SeverityArray(x).ServiceDown = False
+						SeverityArray(x).ThreshCount = 0
+						If DO_DEBUG  = "y" Then
+							Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " is Running"
+						End If
+					End If
+				
+
+					'Fire Event if thresholds match
+					If SeverityArray(x).ThreshCount = SeverityArray(x).Threshold Then
+						If DO_DEBUG  = "y" Then	
+							Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Down for " & SeverityArray(x).ThreshCount & " Time(s)"
+						End If
+						If SeverityArray(x).EventFired = false Then
+								SeverityArray(x).EventTime = now()
+						End If
+						SeverityArray(x).EventFired = true
+						SeverityArray(x).ThreshCount = 0
+						
+			
+						'Service Hung Message
+						If SeverityArray(x).ServiceHung = true Then
+							LongMessage = "Service " & SeverityArray(x).ServiceName & " Was reported as Hung at " &  SeverityArray(x).EventTime
+							If DO_DEBUG  = "y" Then
+								Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Fire Event for Hung"
+							End If
+							If DO_NUMBERS = "y" Then
+								spacepos = instr(1,SeverityArray(x).EventTime," ")
+								ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " HUNG " & AlterString(Mid(str(SeverityArray(x).EventTime),spacepos + 2,Len(str(SeverityArray(x).EventTime))-spacepos)," ","-")
+							Else
+								ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " HUNG NULL"
+							End If
+							If DO_EVENT  = "y" Then
+								MSActions SeverityArray(x).Severity,ShortMsg, AKPID, "", LongMessage
+							End If	
+							If (DO_DATA = "y") Then
+								DataLog II, 50, LongMessage
+							End If
+					
+						'Service Down Message
+						ElseIf SeverityArray(x).ServiceDown = true Then
+							LongMessage = "Service " & SeverityArray(x).ServiceName & " Was reported as Down at " &  SeverityArray(x).EventTime
+							If DO_DEBUG  = "y" Then
+								Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Fire Event for Down"
+							End If
+							If DO_NUMBERS = "y" Then
+								spacepos = instr(1,SeverityArray(x).EventTime," ")
+								ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " DOWN " & AlterString(Mid(str(SeverityArray(x).EventTime),spacepos + 2,Len(str(SeverityArray(x).EventTime))-spacepos)," ","-")
+							Else
+								ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " DOWN NULL"
+							End If
+							If DO_EVENT  = "y" Then
+								MSActions SeverityArray(x).Severity,ShortMsg, AKPID, "", LongMessage
+							End If
+							If (DO_DATA = "y") Then
+								DataLog II, 0, LongMessage
+							End If
+
+						End If
+						
+					'Fire Clear Event
+					ElseIf (CurrentStatus = SERVICE_RUNNING) And (SeverityArray(x).EventFired = true) Then
+						ServiceDownTimes = datediff("s",SeverityArray(x).EventTime,now())
+						If DO_DEBUG  = "y" Then
+							Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Timestamp : " & SeverityArray(x).EventTime
+							Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Now : " & now()
+							Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Time Down : " & ServiceDownTimes
+						End If
+						LongMessage = "Service " & 	SeverityArray(x).ServiceName & " has been down for " & ServiceDownTimes & " Secs" & Chr(10)
+						LongMessage = LongMessage & "Service Reported down at " & SeverityArray(x).EventTime & Chr(10)
+						LongMessage = LongMessage & "Service Reported restored at " & now()
+						SeverityArray(x).EventFired = false
+						SeverityArray(x).ThreshCount = 0
+						If DO_DEBUG  = "y" Then
+							Print #2, now() & "      " & "Service : " & SeverityArray(x).ServiceName & " Fire Event for UP"
+						End If
+		
+						If DO_NUMBERS = "y" Then
+							ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " RESTORED " & alterstring(Time()," ","-") 
+						Else
+							ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " RESTORED NULL"
+						End If
+						If DO_EVENT  = "y" Then
+							If SEND_NORMAL = "y" Then
+								If DO_DEBUG  = "y" Then Print #2, now() & "       " & "Send Auto Clear"	
+									MSActions Sev_Normal,ShortMsg, AKPID, "" , LongMessage
+								Else
+								If DO_DEBUG  = "y" Then Print #2, now() & "       " & "AKPID = "	& AKPID & "  Left(AKPID,17) = " & Mid(AKPID,instr(1,AKPID,"A"),17)
+								If Mid(AKPID,instr(1,AKPID,"A"),17) = "ACTION_SSICmdPost" Then
+									MSActions Sev_Normal,ShortMsg, AKPID, "" , LongMessage
+									If DO_DEBUG  = "y" Then Print #2, now() & "       " & "Action is Command Post so send Auto Clear anyway"	
+								Else
+									If DO_DEBUG  = "y" Then Print #2, now() & "       " & "Do Not Send Auto Clear"	
+								End If
+							End If
+						End If
+						If (DO_DATA = "y") Then
+							DataLog II, 75, LongMessage
+						End If
+					ElseIf (CurrentStatus = SERVICE_RUNNING) And (SeverityArray(x).EventFired = false) Then
+						LongMessage = "Service " & 	SeverityArray(x).ServiceName & " is up"
+						If (DO_DATA = "y") Then
+							DataLog II, 100, LongMessage
+						End If
+					End If
+
+
+				Else
+					If DO_DEBUG  = "y" Then
+						Print #2, now() & "      " & "Service :" & ServiceName & " Does not exist"
+					End If	
+					If DO_NotExist = "y" Then
+						LongMessage = "Service " & 	SeverityArray(x).ServiceName & " Does not Exist on this server"
+						ShortMsg = MachineNamestr & " " & AlterString(SeverityArray(x).ServiceName," ","-") & " NOT-EXIST NULL"
+						MSActions Sev_NotExist,ShortMsg, AKPID, "" , LongMessage
+					End If
+				End If
+			End If
+		End If
+	Next x
+	scount = ubound(SeverityArray)
+	debugproccess = false
+	If DO_DEBUG  = "y" Then
+		Print #2, now() & "       " & "Opening service list file to write array elements at end of iteration"
+	End If
+	Open NetIQInstallpath & "servicelist" & str(getjobid()) & ".txt" For Output As #4
+	If servicefileopencount = 1 Then
+		If DO_DEBUG  = "y" Then
+			Print #2, now() & "       " & "Sending event as service file could not be opened"
+			Print #2, now() & "       " & "at last iteration, but can now"
+		End If
+		LongMessage = "Script able to open service list file after failing last time"
+		If DO_NUMBERS = "y" Then
+			eventmsg = Machinenamestr & " " &  "SERVICE-LIST NORMAL " &  alterstring(Time()," ","-")
+		Else
+			eventmsg = Machinenamestr & " " &  "SERVICE-LIST NORMAL NULL"
+		End If
+		MSActions Sev_Normal,eventmsg, AKPID, "" , LongMessage			
+	End If
+			servicefileopencount = 0
+
+	servicestr = SeverityList & "-" & warningList & "-" & infoList 
+
+	Write #4,servicestr
+	Write #4,scount
+
+	x = 1
+	For y = 1 To scount
+		Write #4, SeverityArray(y).ServiceName ,SeverityArray(y).Severity,SeverityArray(y).Threshold,SeverityArray(y).ThreshCount
+		Write #4, SeverityArray(y).EventFired, SeverityArray(y).EventTime ,SeverityArray(y).ServiceDown,SeverityArray(y).ServiceHung,SeverityArray(y).Dodata  
+		Write #4, SeverityArray(y).MonitorMan,SeverityArray(y).ManualTime,SeverityArray(y).ManEventFired
+	Next y
+	Close #4
+	If DO_DEBUG  = "y" Then 
+		Print #2, now() & "       " & "Written out new Array to service file"
+		Print #2, now() & "       " & "*******************************************************************"
+		Close #2
+	End If
+Else 
+	If DO_DEBUG  = "y" Then 
+		Print #2, now() & "       " & "No Services Listed to check"
+		Print #2, now() & "       " & "*******************************************************************"
+		Close #2
+	End If
+
+	MCAbort "NT_MachineFolder = " & NT_MachineFolder, "No Services Listed to check"
+End If
+
+GoTo main_exit
+
+
+
+ListHasStar_Error:
+
+If DO_DEBUG  = "y" Then
+	Print #2, now() & "      " & "Warning or Severity List includes a * so cannot be proccesed"
+End If
+
+GoTo main_error
+
+main_error:
+
+If debugproccess = true Then
+	Select Case Err.Number
+	Case 52 To 76
+		DO_DEBUG = "n"
+		eventmsg = Machinenamestr & " " &  "DEBUG ERROR NULL"
+		longm = "Unable to open debug file " &  chr$(10) 
+		longm = longm & NetIQInstallpath & KSName & ".txt" & chr$(10) 
+		longm = longm & "This may be due to file being open." & chr$(10)
+		longm = longm & "Debugging will be stopped for this script," & chr$(10)
+		longm = longm & "Until problem Is fixed."
+		MSActions Sev_Error,eventmsg , AKPID, resname, longm
+		Openfilefail = true
+		debugproccess = false
+		Resume Next 
+	Case Else
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Error has occured, exiting script"
+			Print #2 , Now() & "        " & Err.description
+			Close #2
+		End If
+		mcabort resname,str(Err.Number)& " " & Err.description
+	End Select
+Else
+	Select Case Err.Number
+	Case 52 To 76
+		servicefileopencount=servicefileopencount + 1
+		If DO_NUMBERS = "y" Then
+			eventmsg = Machinenamestr & " " &  "SERVICE-LIST ERROR " & alterstring(Time()," ","-")
+		Else
+			eventmsg = Machinenamestr & " " &  "SERVICE-LIST ERROR NULL"
+		End If
+		longm = "Unable to open Service List file " &  chr$(10) 
+		longm = longm & NetIQInstallpath & "servicelist" & str(getjobid()) & ".txt" & chr$(10) 
+		longm = longm & "This may be due to file being open." & chr$(10)
+
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "File I/O Error has occured that is not related to the Debug Info"
+			Print #2 , Now() & "        " & "Sending error message"
+			Print #2 , Now() & "        " & "servicefileopencount = " & servicefileopencount
+		End If
+		If servicefileopencount = 2 Then
+			longm = longm & "This error has caused this script to abort"
+			MSActions 1,eventmsg , AKPID, resname, longm
+			If DO_DEBUG  = "y" Then
+				Print #2 , Now() & "        " & "Service List File has failed to open 2 times"
+				Print #2 , Now() & "        " & "so Job is aborting"
+				Close #2
+			End If
+			mcabort resname,"Unable to open Service List file"
+		Else
+			longm = longm & "service checking will be stopped for this script," & chr$(10)
+			longm = longm & "Until problem Is fixed or another iteration occurs."
+			MSActions Sev_Error,eventmsg , AKPID, resname, longm		
+		End If
+		If DO_DEBUG  = "y" Then
+			Close #2
+		End If
+		GoTo main_exit
+	Case Else
+		If DO_DEBUG  = "y" Then
+			Print #2 , Now() & "        " & "Error has occured, exiting script"
+			Print #2 , Now() & "        " & Err.description
+			Close #2
+		End If
+		mcabort resname,str(Err.Number)& " " & Err.description
+	End Select
+End If
+
+
+main_exit:
+End Sub
+
+'### End KPS Section

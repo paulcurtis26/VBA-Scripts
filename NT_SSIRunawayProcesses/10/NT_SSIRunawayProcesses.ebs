@@ -1,0 +1,554 @@
+'Description = Detect runaway processes and optionally kill such processes
+
+'### End KP-Status Section
+
+'### Begin KPC Section
+'Parameters = 0 128 0 4 30 0 0 2147483647 0 99991231 0 235959
+
+'### End KPC Section
+
+'### Begin Type Section
+Const NT_MachineFolder = ""
+
+'### End Type Section
+
+
+'### Begin KPP Section
+
+'### Author 		: Dayanand Sankar (713) 245-1556
+'### Description	: Monitors Runaway processes 
+'### Changed by		: Dayanand Sankar (713) 245-1556
+'### Date			: 6/12/97
+'### Enhancements 	: -Change to accomodate 'n' consecutive times of occurrences for runaway processes exceeding CPU thresholds
+'###				  -Initial Clear message and Clear message after a threshold has been 
+'###				   reached and then falling below that threshold 'n' consecutive times.
+'###				  -Also event messages are formatted to represent 
+'###				   Counter, Value and Number with only spaces seperating these three entities.
+
+'[V<This KS samples a process' CPU usage the specified number of consecutive times. If the process exceeds the CPU threshold in the number of consecutive samples, an event is raised. You can specify processes not to monitor or kill. (Version 1.0)>V] 
+
+Const MONITORPROCS = "NETIQ,IDLE,SYSTEM"   '[M<Monitor processes, separated by "," w/ no space. Use '*' for all processes>M] [T<String,1000,',',>T] 
+Const TH_PROCS = "50,40,85"				'[M<CPU % limit for above process separated by "," w/ no space.>M] [T<String,1000,',',>T]
+Const NO_SAMPLE = "3,3,3"					'[M<# of consecutive samples to take before raising event, for above processes separated by "," w/ no space.>M] [T<String,1000,',',>T]
+Const DO_KILL = "y,n,n"  						'[M<KILL above runnaway process when detected? separated by "," w/ no space. (y/n)>M] [T<String,1000,',',"yn">T]
+Const NOMONITORPROCS = "EXPLORER,SMSS,CSRSS" '[M<IGNORE processes, separated by "," w/ no space.>M] [T<String,1000,',',>T] 
+Const DEF_TH_PROCS = 95						'[M<CPU % for other runaway process > >M] [T<Integer,,,0,100,%>T]
+Const DEF_NO_SAMPLE = 3						'[M<# of consecutive samples to take for other runaway processes>M] [T<Integer,,,1,10,#>T]
+Const DEF_DO_KILL = "n"  					'[M<KILL other runaway process when detected? (y/n)>M] 
+Const DO_EVENT = "y"						'[M<Event? (y/n)>M] [T<String,1,,"yn">T]
+Const DO_DATA = "n"							'[M<Collect data ? (y/n)>M] [T<String,1,,"yn">T]	
+Const DO_NUMBERS = "y" '[M<Show numbers? (y/n)>M][T<string,1,' ',yn">T]
+Const NOKILLPROCS = "EXPLORER"       		'[M<NEVER KILL processes, separated by "," w/ no space.>M] [T<String,1000,',',>T] 
+Const SevSuccKill = 10						'[M<Severity - If successfully killed the runaway process>M] [T<Integer,,,1, 40, SevLevel>T]
+Const SevNotKillable = 10					'[M<Severity - If failed to kill the runaway process>M] [T<Integer,,,1, 40, SevLevel>T] 
+Const SevEvent = 5							'[M<Event Severity>M] [T<Integer,,,1, 40, SevLevel>T]
+
+'[A<When the runaway process is detected, the selected action is taken.>A]
+Const AKPID = "AKP_NULL"	' [M<Action Taken>M]
+
+'### End KPP Section
+
+
+'### Begin KPS Section
+
+Type PROCESS_STRUCT
+   PName As String
+   PID   As Long
+   CurrentCPUUsage As Double
+   CPUUsageLimit As Double
+   Count As Integer
+   CountLimit As Integer
+   ClearCount As Integer
+   FirstClearCount As Integer
+   NormalClear As Boolean
+   FirstClear As Boolean
+   Kill As String
+End Type
+
+Dim NT As Object
+Dim Sys As Object
+Const UNITNUMBER = "^^#"
+
+'Dim DebugCount As Integer
+
+Private Processes() As PROCESS_STRUCT
+Private NewProcesses() As PROCESS_STRUCT
+
+Function IsValid() As Boolean
+
+	Dim ProcessCount As Integer
+	Dim CpuPerCount As Integer
+	Dim ConSecCount As Integer
+	Dim KillNoKillCount As Integer
+
+	IsValid = False
+
+	If Not MONITORPROCS = "*" Then
+		ProcessCount = ItemCount(MONITORPROCS, ",") 
+		CpuPerCount = ItemCount(TH_PROCS, ",")
+		ConSecCount = ItemCount(NO_SAMPLE, ",")
+		KillNoKillCount = ItemCount(DO_KILL, ",")
+		
+		If ProcessCount = CpuPerCount And ProcessCount = ConSecCount And ProcessCount = KillNoKillCount Then
+			IsValid = True
+		End If
+	Else
+		IsValid = True
+	End If
+
+End Function
+
+Function AlterString(sString As String, sCharToReplace As String, sCharToReplaceWith As String) As String
+
+    Dim nLen As Long
+    Dim sTemp As String
+    Dim sTemp1 As String
+    Dim I As Long
+    
+    nLen = Len(sString)
+    
+    For I = 1 To nLen
+        sTemp = Mid(sString, I, 1)
+        If sTemp = sCharToReplace Then
+            sTemp = sCharToReplaceWith
+        End If
+        sTemp1 = sTemp1 + sTemp
+    Next I
+    AlterString = sTemp1
+    
+End Function
+
+Sub	EnumProcs()
+
+	Dim lResult As Long
+	Dim InstList As String
+	Dim Inst As String
+	Dim PID As Long
+	Dim CPUThres As Double
+	Dim J As Long
+	Dim Count As Long
+	Dim NewCount As Long
+ 	Dim DetailMsg As String
+	Dim TempPro() As String
+	Dim InstCount As Integer
+	Dim OldInstance As String
+	
+	OldInstance = ""
+	InstCount = 0
+	NewCount = 0
+	Count = 0
+	Set NT = CreateObject("NetiQAgent.NT")
+	Set Sys = NT.System
+
+	lResult = Sys.InstanceValue("Process", "% Processor Time", 0, InstList, 1)
+	
+	ReDim TempPro(lResult - 1)
+	ReDim Preserve Processes(lResult - 1)
+
+	For I = 0 To lResult - 1
+		TempPro(I) = Item$(InstList, I + 1,, chr$(10))
+	Next I
+
+	ArraySort TempPro
+	
+	For I = 0 To lResult - 1
+		Inst = TempPro(I)		
+		If TempPro(I) <> OldInstance Then
+			OldInstance = TempPro(I)
+			InstCount = 0
+		Else
+			InstCount = InstCount + 1
+		End If
+		
+		Inst = TempPro(I)
+		PID = Sys.CounterValueEx("Process", "ID Process", Inst, "", 0, InstCount)
+		CPUThres = Sys.CounterValueEx("Process", "% Processor Time", Inst, "", 0, InstCount)
+		If IterationCount() = 1 Then
+		'If DebugCount = 0 Then
+			Processes(I).PName = Inst
+			Processes(I).PID = PID
+			If Not MONITORPROCS = "*" Then
+				For J = 1 To ItemCount(MONITORPROCS, ",")	
+					If UCase$(Inst) = UCase$(Item$(MONITORPROCS, J,, ",")) Then
+				   		Processes(I).CPUUsageLimit = CDbl(item$(TH_PROCS, J,, ","))
+						Processes(I).CountLimit = CInt(item$(NO_SAMPLE, J,, ","))
+						If Not NoKill(Inst) Then
+							Processes(I).Kill = item$(DO_KILL, J,, ",")
+						Else
+							Processes(I).Kill = "n"
+						End If
+						Exit For
+					Else
+				   		Processes(I).CPUUsageLimit = DEF_TH_PROCS
+						Processes(I).CountLimit = DEF_NO_SAMPLE			
+						If Not NoKill(Inst) Then
+							Processes(I).Kill = DEF_DO_KILL
+						Else
+							Processes(I).Kill = "n"
+						End If
+					End If
+				Next J
+			Else
+		   		Processes(I).CPUUsageLimit = DEF_TH_PROCS
+				Processes(I).CountLimit = DEF_NO_SAMPLE			
+				Processes(I).Kill = DEF_DO_KILL
+			End If
+			Processes(I).CurrentCPUUsage =	CPUThres
+			If Processes(I).CurrentCPUUsage > Processes(I).CPUUsageLimit Then
+				Processes(I).Count = 1
+				Processes(I).ClearCount = 0
+				Processes(I).FirstClearCount = 0
+			Else
+				Processes(I).Count = 0
+				Processes(I).ClearCount = 1
+				Processes(I).FirstClearCount = 1
+			End If
+			Processes(I).NormalClear = False
+			Processes(I).FirstClear = False
+		Else
+			Count = UBound(Processes)
+			For J = 0 To Count
+				If UCase$(Inst) = UCase$(Processes(J).PName) And Processes(J).PID = PID Then
+					Processes(J).CurrentCPUUsage = CPUThres
+					If Processes(J).CurrentCPUUsage > Processes(J).CPUUsageLimit Then
+						Processes(J).Count = Processes(J).Count + 1
+						Processes(J).ClearCount = 0
+						Processes(J).FirstClearCount = 0
+					Else
+						Processes(J).ClearCount = Processes(J).ClearCount + 1
+						Processes(J).FirstClearCount = Processes(J).FirstClearCount + 1
+					End If
+					ReDim Preserve NewProcesses(NewCount)
+					NewProcesses(NewCount).PName = Processes(J).PName
+					NewProcesses(NewCount).PID = Processes(J).PID
+					NewProcesses(NewCount).CurrentCPUUsage = Processes(J).CurrentCPUUsage
+					NewProcesses(NewCount).CPUUsageLimit = Processes(J).CPUUsageLimit
+					NewProcesses(NewCount).Count = Processes(J).Count
+					NewProcesses(NewCount).CountLimit = Processes(J).CountLimit
+					NewProcesses(NewCount).ClearCount = Processes(J).ClearCount
+					NewProcesses(NewCount).FirstClearCount = Processes(J).FirstClearCount
+					NewProcesses(NewCount).NormalClear = Processes(J).NormalClear
+					NewProcesses(NewCount).FirstClear = Processes(J).FirstClear
+					NewProcesses(NewCount).Kill = Processes(J).Kill
+					NewCount = NewCount + 1
+				End If
+			Next J
+			If (Not Exists(Inst, PID)) Then
+				NewNewCount = UBound(NewProcesses)				
+				If Err.Number = 9 Then
+					NewNewCount = 0				
+				Else
+					NewNewCount = NewNewCount + 1
+				End If
+				NewCount = NewNewCount + 1
+				ReDim Preserve NewProcesses(NewNewCount)
+				NewProcesses(NewNewCount).PName = Inst
+				NewProcesses(NewNewCount).PID = PID
+				NewProcesses(NewNewCount).CurrentCPUUsage =	CPUThres
+				If Not MONITORPROCS = "*" Then
+					For J = 1 To ItemCount(MONITORPROCS, ",")	
+						If UCase$(Inst) = UCase$(Item$(MONITORPROCS, J,, ",")) Then
+					   		NewProcesses(NewNewCount).CPUUsageLimit = CDbl(item$(TH_PROCS, J,, ","))
+							NewProcesses(NewNewCount).CountLimit = CInt(item$(NO_SAMPLE, J,, ","))
+							If Not NoKill(Inst) Then
+								NewProcesses(NewNewCount).Kill = item$(DO_KILL, J,, ",")
+							Else
+								NewProcesses(NewNewCount).Kill = "n"
+							End If
+							Exit For
+						Else
+					   		NewProcesses(NewNewCount).CPUUsageLimit = DEF_TH_PROCS
+							NewProcesses(NewNewCount).CountLimit = DEF_NO_SAMPLE			
+							If Not NoKill(Inst) Then
+								NewProcesses(NewNewCount).Kill = DEF_DO_KILL
+							Else
+								NewProcesses(NewNewCount).Kill = "n"
+							End If
+						End If
+					Next J
+				Else
+			   		NewProcesses(NewNewCount).CPUUsageLimit = DEF_TH_PROCS
+					NewProcesses(NewNewCount).CountLimit = DEF_NO_SAMPLE			
+					NewProcesses(NewNewCount).Kill = DEF_DO_KILL
+				End If
+				If NewProcesses(NewNewCount).CurrentCPUUsage > NewProcesses(NewNewCount).CPUUsageLimit Then
+					NewProcesses(NewNewCount).Count = 1
+					NewProcesses(NewNewCount).ClearCount = 0
+					NewProcesses(NewNewCount).FirstClearCount = 0
+				Else
+					NewProcesses(NewNewCount).Count = 0
+					NewProcesses(NewNewCount).ClearCount = 1
+					NewProcesses(NewNewCount).FirstClearCount = 1
+				End If
+				NewProcesses(NewNewCount).NormalClear = False
+				NewProcesses(NewNewCount).FirstClear = False
+			End If
+		End If
+
+	Next I
+
+End Sub
+
+Sub CollectData()
+
+
+	Dim ProcCount As Integer
+	Dim EachResult As Double
+	Dim PID As Long
+	Dim Inst As String
+	Dim I As Integer
+	Dim TotalResult As Double
+	Dim DataPoint As String
+	Dim TitleMsg As String
+
+	ProcCount = UBound(Processes)
+   	If IterationCount() = 1 Then  ' setup during 1st run
+       	DataHeader "Processes" & UNITNUMBER, 0, 0
+   	End If				    
+		
+	TitleMsg = TitleMsg & "Process" & Space$(9) & "PID" & Space$(3) & "% CPU" & chr$(10)
+   	TitleMsg = TitleMsg & "-------" & Space$(9) & "---" & Space$(3) & "-----" & chr$(10)
+
+	EachResult = 0.0
+	TotalResult = 0.0
+		
+	For I = 0 To ProcCount
+		Inst = Processes(I).PName 
+	   	PID = Processes(I).PID
+		EachResult = Processes(I).CurrentCPUUsage
+		If DO_DATA = "y" Then	         'data collection requested   
+	      	DataPoint = DataPoint & Format$(Inst, "!@@@@@@@@@@@@@@@@") _
+		 	 	             & Format$(PID,"General Number") & Space$(3) & Format$(EachResult, "0.00") & chr$(10) 
+	        TotalResult = TotalResult + EachResult
+	      	DataLog 0, TotalResult, TitleMsg & DataPoint 'collect data each proc's data stream
+	   	End If
+	Next I
+
+End Sub
+
+Function NoKill(ByRef Inst As String) As Variant
+
+	Dim Count As Integer
+
+	NoKill = False
+	If NOKILLPROCS <> "" Then
+		Count = ItemCount(NOKILLPROCS, ",")
+		For I = 1 To Count
+			If Ucase$(Inst) =  Ucase$(Item$(NOKILLPROCS, I, , ",")) Then  
+				NoKill = True
+				Exit For
+			End If
+		Next I
+	End If
+
+End Function
+
+
+Function Exists(ByRef Inst As String, PID As Long) As Variant
+
+	Dim nProcCount As Integer
+	Dim I As Integer
+	
+	nProcCount = UBound(Processes)
+
+	Exists = False
+	For I = 0 To nProcCount
+		If Inst = Processes(I).PName And PID = Processes(I).PID Then
+			Exists = True
+			Exit For
+		End If
+	Next I
+
+End Function
+ 
+
+Sub CleanSwapp()
+
+	Dim ProcCount As Integer
+	Dim MonProcesses() As PROCESS_STRUCT
+	Dim J As Integer
+	Dim Count As Integer
+
+	If IterationCount() <> 1 Then
+	'If	DebugCount <> 0 Then
+		ProcCount = UBound(NewProcesses)
+		
+		For J = 0 To ProcCount
+			If DoMonitor(NewProcesses(J).PName) Then
+				If Count = 0 Then
+					Count = 0
+				End If
+				ReDim Preserve MonProcesses(Count)
+				MonProcesses(Count).PName = NewProcesses(J).PName			
+				MonProcesses(Count).PID = NewProcesses(J).PID
+				MonProcesses(Count).CurrentCPUUsage = NewProcesses(J).CurrentCPUUsage
+				MonProcesses(Count).CPUUsageLimit = NewProcesses(J).CPUUsageLimit
+				MonProcesses(Count).Count = NewProcesses(J).Count
+				MonProcesses(Count).CountLimit = NewProcesses(J).CountLimit
+				MonProcesses(Count).ClearCount = NewProcesses(J).ClearCount
+				MonProcesses(Count).FirstClearCount = NewProcesses(J).FirstClearCount
+				MonProcesses(Count).NormalClear = NewProcesses(J).NormalClear
+				MonProcesses(Count).FirstClear = NewProcesses(J).FirstClear
+				MonProcesses(Count).Kill = NewProcesses(J).Kill
+				Count = Count + 1
+			End If
+		Next J
+
+		ProcCount = UBound(MonProcesses)
+		ReDim Processes(ProcCount)
+		For J = 0 To ProcCount
+			Processes(J).PName = MonProcesses(J).PName			
+			Processes(J).PID = MonProcesses(J).PID
+			Processes(J).CurrentCPUUsage = MonProcesses(J).CurrentCPUUsage
+			Processes(J).CPUUsageLimit = MonProcesses(J).CPUUsageLimit
+			Processes(J).Count = MonProcesses(J).Count
+			Processes(J).CountLimit = MonProcesses(J).CountLimit
+			Processes(J).ClearCount = MonProcesses(J).ClearCount
+			Processes(J).FirstClearCount = MonProcesses(J).FirstClearCount
+			Processes(J).NormalClear = MonProcesses(J).NormalClear
+			Processes(J).FirstClear = MonProcesses(J).FirstClear
+			Processes(J).Kill = MonProcesses(J).Kill
+		Next J
+		ReDim NewProcesses(0)
+	End If
+End Sub
+
+
+Function DoMonitor(ProcName As String) As Variant
+
+	Dim J As Integer
+
+	DoMonitor = True
+
+	For J = 1 To ItemCount(NOMONITORPROCS, ",")	
+		If UCase$(ProcName) = UCase$(Item$(NOMONITORPROCS, J,, ",")) Then
+			DoMonitor = False
+			Exit For
+		End If
+	Next J
+
+End Function
+
+
+Sub DisplayEvent
+
+	Dim Count As Long	
+	Dim LongMsg As String
+	Dim ShortMsg As String
+	Dim TitleMsg As String
+	Dim I As Long
+	Dim EachResult As Double
+	Dim KillMsgStatus As String
+	Dim SevToUse As Integer
+
+	Count = UBound(Processes)
+	For I = 0 To Count
+		If Processes(I).Count = Processes(I).CountLimit Then 
+        	If Processes(I).Kill = "y" Then
+        		If ( Not Sys.TerminateProcess(Processes(I).PID)) Then
+  	   				KillMsgStatus  = "Fail"			
+  		            SevToUse = SevNotKillable
+                Else
+  			    	KillMsgStatus = "Success"
+       			    SevToUse = SevSuccKill
+				End If
+            Else
+				SevToUse = SevEvent
+			End If			
+			TitleMsg = "The following process has CPU Util % > " & CStr(Processes(I).CPUUsageLimit) & chr$(10) _
+		       			   & "for " & CStr(Processes(I).CountLimit) & " consecutive times" & chr$(10) & chr$(10)
+		   	TitleMsg = TitleMsg & "Process" & Space$(9) & "PID" & Space$(3) & "% CPU" & Space$(3) & "KillStatus" & chr$(10)
+		   	TitleMsg = TitleMsg & "-------" & Space$(9) & "---" & Space$(3) & "-----" & Space$(3) & "----------" & chr$(10)
+			EachResult = Processes(I).CurrentCPUUSage
+      		LongMsg = format$(Processes(I).PName, "!@@@@@@@@@@@@@@@@") _ 
+ 	 	       & Format$(Processes(I).PID,"General Number") & Space$(3) & Format$(EachResult, "0.00") & Space$(3) & KillMsgStatus & chr$(10) 
+			If DO_NUMBERS = "y" Then
+				ShortMsg = "Process" & " " & AlterString(Processes(I).PName & " exceeds CPU threshold", " " , "-") & " " & format$(Processes(I).CurrentCPUUsage, "0.00")
+			Else
+				ShortMsg = "Process" & " " & AlterString(Processes(I).PName & " exceeds CPU threshold", " " , "-")
+			End If				
+			Processes(I).NormalClear = True
+			Processes(I).ClearCount = 0
+			Processes(I).FirstClear = True
+			MSActions SevToUse, ShortMsg, AKPID, "", TitleMsg & LongMsg
+		ElseIf Processes(I).ClearCount = Processes(I).CountLimit And Processes(I).NormalClear = True Then
+ 			If DO_NUMBERS = "y" Then
+				ShortMsg = "Process" & " " & AlterString(Processes(I).PName & " CPU threshold normal", " " , "-") & " " & format$(Processes(I).CurrentCPUUsage, "0.00")
+			Else
+				ShortMsg = "Process" & " " & AlterString(Processes(I).PName & " CPU threshold normal", " " , "-")
+			End If				
+		   	TitleMsg = "The following process has CPU Util % < " & CStr(Processes(I).CPUUsageLimit) & chr$(10) _
+		       			   & "for " & CStr(Processes(I).CountLimit) & " consecutive times" & chr$(10) & chr$(10)
+		   	TitleMsg = TitleMsg & "Process" & Space$(9) & "PID" & Space$(3) & "% CPU" & Space$(3) & "KillStatus" & chr$(10)
+		   	TitleMsg = TitleMsg & "-------" & Space$(9) & "---" & Space$(3) & "-----" & Space$(3) & "----------" & chr$(10)
+			EachResult = Processes(I).CurrentCPUUSage
+      		LongMsg = format$(Processes(I).PName, "!@@@@@@@@@@@@@@@@") _ 
+ 	 	       & Format$(Processes(I).PID,"General Number") & Space$(3) & Format$(EachResult, "0.00") & Space$(3) & "N/A" 
+			Processes(I).Count = 0
+			Processes(I).NormalClear = False
+			Processes(I).ClearCount = 0
+			Processes(I).FirstClear = True
+			MSActions 40, ShortMsg, AKPID, "", TitleMsg & LongMsg
+		ElseIf Processes(I).FirstClearCount = Processes(I).CountLimit And Processes(I).NormalClear <> True And Processes(I).FirstClear <> True Then
+ 			If DO_NUMBERS = "y" Then
+				ShortMsg = "Process" & " " & AlterString(Processes(I).PName & " CPU threshold normal", " " , "-") & " " & format$(Processes(I).CurrentCPUUsage, "0.00")
+			Else
+				ShortMsg = "Process" & " " & AlterString(Processes(I).PName & " CPU threshold normal", " " , "-")
+			End If				
+		   	TitleMsg = "The following process has CPU Util % < " & CStr(Processes(I).CPUUsageLimit) & chr$(10) _
+		       			   & "for " & CStr(Processes(I).CountLimit) & " consecutive times" & chr$(10) & chr$(10)
+		   	TitleMsg = TitleMsg & "Process" & Space$(9) & "PID" & Space$(3) & "% CPU" & Space$(3) & "KillStatus" & chr$(10)
+		   	TitleMsg = TitleMsg & "-------" & Space$(9) & "---" & Space$(3) & "-----" & Space$(3) & "----------" & chr$(10)
+			EachResult = Processes(I).CurrentCPUUSage
+      		LongMsg = format$(Processes(I).PName, "!@@@@@@@@@@@@@@@@") _ 
+ 	 	       & Format$(Processes(I).PID,"General Number") & Space$(3) & Format$(EachResult, "0.00") & Space$(3) & "N/A"
+			Processes(I).Count = 0
+			Processes(I).NormalClear = False
+			Processes(I).ClearCount = 0
+			Processes(I).FirstClear = True
+			MSActions 40, ShortMsg, AKPID, "", TitleMsg & LongMsg
+		End If
+	Next I
+
+End Sub
+
+Sub Main()
+
+	Dim ProcessCount As Integer
+	Dim CpuPerCount As Integer
+	Dim ConSecCount As Integer
+	Dim KillNoKillCount As Integer
+	Dim LongMsg As String
+
+	' Validate input entered by the users
+	If IterationCount() = 1 Then
+		If Not IsValid Then
+			LongMsg = "No. of processes to monitor are not in sync with the no. of CPU thresholds, consecutive samples etc.,"
+			MSActions SevEvent, "Processes Mismatched-number-of-processes,-CPU-thresholds-etc. NULL", AKPID, "", LongMsg		 	'start an action and record event
+			MCAbort "", "Mismatched number of processes, CPU thresholds etc"
+		End If
+	End If
+
+	' Enummerate processes and store them in a array
+
+	EnumProcs
+	
+	' Clean up and swapp old array with new array
+	
+	CleanSwapp
+	
+	' Collect data
+
+	CollectData
+
+	'DebugCount = DebugCount + 1		
+	' Display events for those runnaway processes that have consecutively exceeded CPU threshold limit for them
+	
+	DisplayEvent
+	
+End Sub
+
+
+
+
+'### End KPS Section
